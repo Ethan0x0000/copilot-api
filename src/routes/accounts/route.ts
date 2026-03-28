@@ -21,6 +21,7 @@ accountsRoute.get("/", async (c) => {
         accounts: accounts.map((a) => ({
           name: a.name,
           accountType: a.accountType,
+          tier: a.tier,
           active: a.active,
           status: a.status,
           plan: a.usageSummary?.planDisplay ?? null,
@@ -60,6 +61,7 @@ accountsRoute.get("/status", async (c) => {
         accounts: accounts.map((a) => ({
           name: a.name,
           accountType: a.accountType,
+          tier: a.tier,
           active: a.active,
           status: a.status,
           lastError: a.lastError ?? null,

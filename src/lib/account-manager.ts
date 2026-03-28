@@ -4,8 +4,11 @@ import { getCopilotUsage } from "~/services/github/get-copilot-usage"
 
 import type { AccountContext } from "./account-context"
 import type { AccountConfig } from "./config"
+import type { TierRoutingContext } from "./routing"
 import type { AccountStatus, AccountUsageSummary } from "./subscription"
 
+import { getRoutingConfig } from "./config"
+import { buildRoutingContext, filterAndSortByTier } from "./routing"
 import { extractUsageSummary } from "./subscription"
 import { fetchCopilotTokenForAccount, startAccountRefreshLoop } from "./token"
 
@@ -17,6 +20,7 @@ interface AccountState {
   githubToken: string
   copilotToken: string
   accountType: string
+  tier: string
   active: boolean
   refreshController?: AbortController
   // Runtime status
@@ -33,6 +37,7 @@ interface SessionEntry {
 export interface AccountInfo {
   name: string
   accountType: string
+  tier: string
   active: boolean
   activeSessions: number
   status: AccountStatus
@@ -45,6 +50,11 @@ export class AccountManager {
   private sessionMap = new Map<string, SessionEntry>()
   private roundRobinIndex = 0
   private pruneTimer: ReturnType<typeof setInterval> | null = null
+  private routingCtx: TierRoutingContext
+
+  constructor() {
+    this.routingCtx = buildRoutingContext(getRoutingConfig())
+  }
 
   async initialize(configs: Array<AccountConfig>): Promise<void> {
     const activeConfigs = configs.filter((c) => c.active !== false)
@@ -82,8 +92,9 @@ export class AccountManager {
 
   async addAccount(config: AccountConfig): Promise<void> {
     const accountType = config.accountType ?? "individual"
+    const tier = config.tier ?? "pro"
 
-    consola.info(`Setting up account: ${config.name} (${accountType})`)
+    consola.info(`Setting up account: ${config.name} (${tier})`)
 
     let accountState: AccountState
 
@@ -97,6 +108,7 @@ export class AccountManager {
         githubToken: config.githubToken,
         copilotToken: token,
         accountType,
+        tier,
         active: config.active !== false,
         status: "ready",
       }
@@ -133,6 +145,7 @@ export class AccountManager {
         githubToken: config.githubToken,
         copilotToken: "",
         accountType,
+        tier,
         active: false,
         status: "error",
         lastError:
@@ -171,20 +184,42 @@ export class AccountManager {
     return true
   }
 
-  resolveAccount(sessionId?: string): AccountContext | undefined {
-    const activeAccounts = this.getActiveAccounts()
+  resolveAccount(
+    sessionId?: string,
+    model?: string,
+  ): AccountContext | undefined {
+    let activeAccounts = this.getActiveAccounts()
     if (activeAccounts.length === 0) return undefined
+
+    // Tier-based filtering: only keep accounts eligible for the requested model
+    if (model) {
+      const filtered = filterAndSortByTier(
+        activeAccounts,
+        model,
+        this.routingCtx,
+      )
+      if (filtered.length > 0) {
+        activeAccounts = filtered
+      }
+      // If no account is eligible, fall back to all active accounts
+      // (better to serve with a potentially blocked account than to fail)
+    }
 
     // Session affinity: if we have a session ID, try to reuse the same account
     if (sessionId) {
       const session = this.sessionMap.get(sessionId)
       if (session) {
         const account = this.accounts.get(session.accountName)
-        if (account?.active && account.status === "ready") {
+        // Check session account is still eligible for this model
+        if (
+          account?.active
+          && account.status === "ready"
+          && activeAccounts.some((a) => a.name === account.name)
+        ) {
           session.lastSeen = Date.now()
           return this.toContext(account)
         }
-        // Account no longer usable, remove stale session
+        // Account no longer usable for this model, remove stale session
         this.sessionMap.delete(sessionId)
       }
 
@@ -197,7 +232,7 @@ export class AccountManager {
       return this.toContext(selectedAccount)
     }
 
-    // No session ID: round-robin
+    // No session ID: round-robin among eligible accounts
     return this.toContext(this.selectNextAccount(activeAccounts))
   }
 
@@ -217,6 +252,7 @@ export class AccountManager {
       result.push({
         name: account.name,
         accountType: account.accountType,
+        tier: account.tier,
         active: account.active,
         activeSessions,
         status: account.status,

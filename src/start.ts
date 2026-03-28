@@ -6,6 +6,7 @@ import consola from "consola"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
+import { runWithAccount } from "./lib/account-context"
 import { AccountManager } from "./lib/account-manager"
 import { getAccounts, mergeConfigWithDefaults } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
@@ -82,7 +83,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
     await setupSingleAccount(options)
   }
 
-  await cacheModels()
+  await initModels()
 
   consola.info(
     `Available models: \n${state.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
@@ -153,6 +154,17 @@ export async function runServer(options: RunServerOptions): Promise<void> {
       idleTimeout: 0,
     },
   })
+}
+
+async function initModels(): Promise<void> {
+  if (state.accountManager?.hasAccounts()) {
+    const firstAccount = state.accountManager.resolveAccount()
+    if (firstAccount) {
+      await runWithAccount(firstAccount, () => cacheModels())
+    }
+  } else {
+    await cacheModels()
+  }
 }
 
 async function setupSingleAccount(options: RunServerOptions): Promise<void> {

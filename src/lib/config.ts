@@ -7,11 +7,20 @@ export interface AccountConfig {
   name: string
   githubToken: string
   accountType?: string
+  tier?: string
   active?: boolean
+}
+
+export interface RoutingConfig {
+  /** Tier priority from lowest to highest, e.g. ["free","student","pro","pro_plus"] */
+  tierPriority?: Array<string>
+  /** Model → minimum tier required. Supports trailing wildcard: "o1*" matches "o1-pro", "o1-mini" */
+  modelTierRequirements?: Record<string, string>
 }
 
 export interface AppConfig {
   accounts?: Array<AccountConfig>
+  routing?: RoutingConfig
   auth?: {
     apiKeys?: Array<string>
   }
@@ -305,6 +314,11 @@ export function getAnthropicApiKey(): string | undefined {
 export function getAccounts(): Array<AccountConfig> {
   const config = getConfig()
   return config.accounts ?? []
+}
+
+export function getRoutingConfig(): RoutingConfig {
+  const config = getConfig()
+  return config.routing ?? {}
 }
 
 export function saveAccounts(accounts: Array<AccountConfig>): void {

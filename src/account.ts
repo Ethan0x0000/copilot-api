@@ -141,12 +141,12 @@ const accountList = defineCommand({
     for (const account of accounts) {
       const activeLabel =
         account.active !== false ? "\u2705 Active" : "\u26D4 Disabled"
-      const type = account.accountType ?? "individual"
+      const tier = account.tier ?? "pro"
       const tokenPreview = `${account.githubToken.slice(0, 8)}...`
 
       const line = await formatAccountListEntry({
         account,
-        type,
+        tier,
         activeLabel,
         tokenPreview,
       })
@@ -159,11 +159,11 @@ const accountList = defineCommand({
 
 async function formatAccountListEntry(options: {
   account: AccountConfig
-  type: string
+  tier: string
   activeLabel: string
   tokenPreview: string
 }): Promise<string> {
-  const { account, type, activeLabel, tokenPreview } = options
+  const { account, tier, activeLabel, tokenPreview } = options
   try {
     const usage = await getCopilotUsage(account.githubToken)
     const summary = extractUsageSummary(usage)
@@ -192,14 +192,14 @@ async function formatAccountListEntry(options: {
     quotaLine += `\n  Resets: ${summary.resetDate}`
 
     return (
-      `${statusIcon} ${account.name} [${type}] (${activeLabel})\n`
+      `${statusIcon} ${account.name} [${tier}] (${activeLabel})\n`
       + `  Token: ${tokenPreview}\n`
       + `${planLine}\n`
       + quotaLine
     )
   } catch {
     return (
-      `\u274C ${account.name} [${type}] (${activeLabel})\n`
+      `\u274C ${account.name} [${tier}] (${activeLabel})\n`
       + `  Token: ${tokenPreview}\n`
       + "  Plan: \u26A0 failed to fetch (token may be invalid)"
     )
@@ -246,7 +246,7 @@ const accountStatus = defineCommand({
 
       const { account, usage } = result.value
       const summary = extractUsageSummary(usage)
-      const type = account.accountType ?? "individual"
+      const tier = account.tier ?? "pro"
       const activeLabel = account.active !== false ? "active" : "disabled"
 
       // Determine status
@@ -260,7 +260,7 @@ const accountStatus = defineCommand({
       const statusEmoji = getStatusEmoji(status)
       const statusLabel = getStatusLabel(status)
 
-      const header = `${statusEmoji} ${account.name} [${type}] - ${statusLabel}`
+      const header = `${statusEmoji} ${account.name} [${tier}] - ${statusLabel}`
       const planInfo =
         `  Plan: ${summary.planDisplay}` + ` (raw: ${summary.plan})`
 

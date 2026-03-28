@@ -35,10 +35,21 @@ server.use("*", async (c, next) => {
     return next()
   }
 
-  // Extract session ID from header for session affinity
   const sessionId = c.req.header("x-session-id")
 
-  const account = accountManager.resolveAccount(sessionId)
+  // Extract model from request body for tier-based routing
+  let model: string | undefined
+  if (c.req.method === "POST") {
+    try {
+      const cloned = c.req.raw.clone()
+      const body = (await cloned.json()) as { model?: string }
+      model = body.model
+    } catch {
+      // Not JSON or no model field — fine
+    }
+  }
+
+  const account = accountManager.resolveAccount(sessionId, model)
   if (!account) {
     return next()
   }
