@@ -389,13 +389,47 @@ export const createResponses = async (
   // service_tier is not supported by github copilot
   payload.service_tier = null
 
-  const response = await fetch(`${copilotBaseUrl(state)}/responses`, {
+  const url = `${copilotBaseUrl(state)}/responses`
+
+  const response = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(payload),
   })
 
   if (!response.ok) {
+    // Handle "input item ID does not belong to this connection" error.
+    // This occurs when reasoning/compaction items carry IDs from a previous
+    // Copilot connection (e.g. after token refresh or account switch in
+    // multi-account mode). Strip the stale opaque items and retry.
+    if (await isConnectionMismatchError(response)) {
+      consola.warn(
+        "Responses API rejected stale input item IDs; retrying without reasoning/compaction items",
+      )
+
+      const cleanedPayload = {
+        ...payload,
+        input: stripOpaqueInputItems(payload.input),
+      }
+
+      const retryResponse = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(cleanedPayload),
+      })
+
+      if (!retryResponse.ok) {
+        consola.error("Retry without opaque items also failed", retryResponse)
+        throw new HTTPError("Failed to create responses", retryResponse)
+      }
+
+      if (payload.stream) {
+        return events(retryResponse)
+      }
+
+      return (await retryResponse.json()) as ResponsesResult
+    }
+
     consola.error("Failed to create responses", response)
     throw new HTTPError("Failed to create responses", response)
   }
@@ -405,4 +439,37 @@ export const createResponses = async (
   }
 
   return (await response.json()) as ResponsesResult
+}
+
+const CONNECTION_MISMATCH_MESSAGE =
+  "input item ID does not belong to this connection"
+
+const isConnectionMismatchError = async (
+  response: Response,
+): Promise<boolean> => {
+  if (response.status !== 401) {
+    return false
+  }
+
+  try {
+    const body = (await response.clone().json()) as {
+      error?: { message?: string }
+    }
+    return body.error?.message?.includes(CONNECTION_MISMATCH_MESSAGE) === true
+  } catch {
+    return false
+  }
+}
+
+const stripOpaqueInputItems = (
+  input: ResponsesPayload["input"],
+): ResponsesPayload["input"] => {
+  if (!Array.isArray(input)) {
+    return input
+  }
+
+  return input.filter((item) => {
+    const type = (item as { type?: string }).type
+    return type !== "reasoning" && type !== "compaction"
+  })
 }
