@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+SERVICE_NAME="${SERVICE_NAME:-copilot-api}"
+SERVICE_USER="${SERVICE_USER:-root}"
+SERVICE_PORT="${SERVICE_PORT:-4141}"
+REMOTE_DIR="${REMOTE_DIR:-/opt/copilot-api}"
+REMOTE_HOME="${REMOTE_HOME:-/var/lib/copilot-api}"
+GLOBAL_ALIAS="${GLOBAL_ALIAS:-capi}"
+CORE_BINARY_NAME="${CORE_BINARY_NAME:-copilot-api-core}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_NAME}"
+
+DEPLOYED_SCRIPT_PATH="${REMOTE_DIR}/copilot-api"
+CORE_BIN="${REMOTE_DIR}/bin/${CORE_BINARY_NAME}"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+die() {
+  echo "[ERROR] $*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Command not found: $1"
+}
+
+run_root() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+
+  require_cmd sudo
+  sudo "$@"
+}
+
+ensure_installed() {
+  if [[ ! -x "${CORE_BIN}" ]]; then
+    die "Core binary not found at ${CORE_BIN}. Run: copilot-api install"
+  fi
+}
+
+run_core() {
+  ensure_installed
+  "${CORE_BIN}" --api-home "${REMOTE_HOME}" "$@"
+}
+
+compile_core() {
+  require_cmd bun
+
+  if [[ ! -d "${SCRIPT_DIR}/node_modules" ]]; then
+    echo "Installing dependencies..."
+    (cd "${SCRIPT_DIR}" && bun install)
+  fi
+
+  echo "Compiling Linux binary..."
+  (cd "${SCRIPT_DIR}" && bun build --compile --minify --outfile "${CORE_BINARY_NAME}" src/main.ts)
+
+  [[ -f "${SCRIPT_DIR}/${CORE_BINARY_NAME}" ]] || die "Build output not found: ${SCRIPT_DIR}/${CORE_BINARY_NAME}"
+}
+
+install_service() {
+  require_cmd systemctl
+  compile_core
+
+  run_root install -d -m 755 "${REMOTE_DIR}" "${REMOTE_DIR}/bin" "${REMOTE_HOME}"
+  run_root install -m 755 "${SCRIPT_DIR}/${CORE_BINARY_NAME}" "${CORE_BIN}"
+
+  # Install dispatcher itself into a stable path
+  run_root install -m 755 "${SCRIPT_PATH}" "${DEPLOYED_SCRIPT_PATH}"
+
+  # Global commands
+  run_root ln -sfn "${DEPLOYED_SCRIPT_PATH}" /usr/local/bin/copilot-api
+  run_root ln -sfn "${DEPLOYED_SCRIPT_PATH}" "/usr/local/bin/${GLOBAL_ALIAS}"
+
+  run_root tee "${SERVICE_FILE}" >/dev/null <<UNIT
+[Unit]
+Description=GitHub Copilot API Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${REMOTE_DIR}
+ExecStart=${CORE_BIN} --api-home ${REMOTE_HOME} start --port ${SERVICE_PORT}
+Restart=always
+RestartSec=3
+Environment=COPILOT_API_HOME=${REMOTE_HOME}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  run_root systemctl daemon-reload
+  run_root systemctl enable --now "${SERVICE_NAME}"
+
+  echo "[OK] Installed service: ${SERVICE_NAME}"
+  echo "[OK] Global commands: copilot-api / ${GLOBAL_ALIAS}"
+  echo "[OK] Endpoints:"
+  echo "     http://127.0.0.1:${SERVICE_PORT}/accounts"
+  echo "     http://127.0.0.1:${SERVICE_PORT}/accounts/status"
+}
+
+service_cmd() {
+  require_cmd systemctl
+  local cmd="$1"
+  run_root systemctl "${cmd}" "${SERVICE_NAME}"
+}
+
+show_logs() {
+  require_cmd journalctl
+  local lines="${1:-200}"
+  run_root journalctl -u "${SERVICE_NAME}" -n "${lines}" --no-pager
+}
+
+api_query() {
+  require_cmd curl
+  local target="${1:-accounts}"
+  case "${target}" in
+    accounts)
+      curl -fsS "http://127.0.0.1:${SERVICE_PORT}/accounts"
+      ;;
+    status|accounts-status)
+      curl -fsS "http://127.0.0.1:${SERVICE_PORT}/accounts/status"
+      ;;
+    *)
+      die "Unknown api target: ${target}"
+      ;;
+  esac
+}
+
+uninstall_service() {
+  require_cmd systemctl
+  run_root systemctl disable --now "${SERVICE_NAME}" || true
+  run_root rm -f "${SERVICE_FILE}"
+  run_root systemctl daemon-reload
+  run_root rm -f /usr/local/bin/copilot-api "/usr/local/bin/${GLOBAL_ALIAS}"
+  echo "[OK] Removed service and global command links"
+}
+
+usage() {
+  cat <<USAGE
+copilot-api dispatcher (VPS local)
+
+Usage:
+  ./copilot-api install
+  ./copilot-api start|stop|restart|status
+  ./copilot-api logs [N]
+  ./copilot-api accounts
+  ./copilot-api accounts-status
+  ./copilot-api account <subcommand...>
+  ./copilot-api api [accounts|status]
+  ./copilot-api uninstall
+
+After install, you can run globally:
+  copilot-api ...
+  capi ...
+
+Environment overrides:
+  SERVICE_NAME, SERVICE_USER, SERVICE_PORT,
+  REMOTE_DIR, REMOTE_HOME, GLOBAL_ALIAS, CORE_BINARY_NAME
+USAGE
+}
+
+cmd="${1:-help}"
+case "${cmd}" in
+  install)
+    install_service
+    ;;
+  start|stop|restart|status)
+    service_cmd "${cmd}"
+    ;;
+  logs)
+    show_logs "${2:-200}"
+    ;;
+  accounts)
+    run_core account list
+    ;;
+  accounts-status)
+    run_core account status
+    ;;
+  account)
+    shift
+    run_core account "$@"
+    ;;
+  api)
+    shift
+    api_query "${1:-accounts}"
+    ;;
+  uninstall)
+    uninstall_service
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    die "Unknown command: ${cmd}"
+    ;;
+esac
