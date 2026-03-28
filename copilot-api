@@ -45,7 +45,7 @@ ensure_installed() {
 
 run_core() {
   ensure_installed
-  "${CORE_BIN}" --api-home "${REMOTE_HOME}" "$@"
+  "${CORE_BIN}" "--api-home=${REMOTE_HOME}" "$@"
 }
 
 compile_core() {
@@ -86,7 +86,7 @@ Wants=network-online.target
 Type=simple
 User=${SERVICE_USER}
 WorkingDirectory=${REMOTE_DIR}
-ExecStart=${CORE_BIN} --api-home ${REMOTE_HOME} start --port ${SERVICE_PORT}
+ExecStart=${CORE_BIN} --api-home=${REMOTE_HOME} start --port ${SERVICE_PORT}
 Restart=always
 RestartSec=3
 Environment=COPILOT_API_HOME=${REMOTE_HOME}

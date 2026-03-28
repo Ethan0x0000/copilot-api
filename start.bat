@@ -126,7 +126,7 @@ set "DISPATCHER_FILE=%~1"
 >> "%DISPATCHER_FILE%" echo SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 >> "%DISPATCHER_FILE%" echo.
 >> "%DISPATCHER_FILE%" echo run_core^(^) {
->> "%DISPATCHER_FILE%" echo   "${CORE_BIN}" --api-home "${REMOTE_HOME}" "$@"
+>> "%DISPATCHER_FILE%" echo   "${CORE_BIN}" "--api-home=${REMOTE_HOME}" "$@"
 >> "%DISPATCHER_FILE%" echo }
 >> "%DISPATCHER_FILE%" echo.
 >> "%DISPATCHER_FILE%" echo install_service^(^) {
@@ -154,7 +154,7 @@ set "DISPATCHER_FILE=%~1"
 >> "%DISPATCHER_FILE%" echo Type=simple
 >> "%DISPATCHER_FILE%" echo User=${SERVICE_USER}
 >> "%DISPATCHER_FILE%" echo WorkingDirectory=${REMOTE_DIR}
->> "%DISPATCHER_FILE%" echo ExecStart=${CORE_BIN} --api-home ${REMOTE_HOME} start --port ${SERVICE_PORT}
+>> "%DISPATCHER_FILE%" echo ExecStart=${CORE_BIN} --api-home=${REMOTE_HOME} start --port ${SERVICE_PORT}
 >> "%DISPATCHER_FILE%" echo Restart=always
 >> "%DISPATCHER_FILE%" echo RestartSec=3
 >> "%DISPATCHER_FILE%" echo Environment=COPILOT_API_HOME=${REMOTE_HOME}
