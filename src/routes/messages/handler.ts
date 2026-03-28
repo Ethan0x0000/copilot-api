@@ -53,6 +53,11 @@ import {
   translateToAnthropic,
   translateToOpenAI,
 } from "./non-stream-translation"
+import {
+  mapReasoningEffortToAnthropic,
+  resolveRequestedReasoningEffort,
+  type ReasoningEffort,
+} from "./reasoning-effort"
 import { translateChunkToAnthropicEvents } from "./stream-translation"
 import { parseSubagentMarkerFromFirstUser } from "./subagent-marker"
 
@@ -357,13 +362,18 @@ const handleWithMessagesApi = async (
   // Using tool_choice: {"type": "any"} or tool_choice: {"type": "tool", "name": "..."} will result in an error because these options force tool use, which is incompatible with extended thinking.
   const toolChoice = anthropicPayload.tool_choice
   const disableThink = toolChoice?.type === "any" || toolChoice?.type === "tool"
+  const requestEffort = resolveRequestedReasoningEffort(anthropicPayload)
+
+  // Clean non-standard fields before forwarding to upstream Messages API
+  delete anthropicPayload.reasoning
+  delete anthropicPayload.reasoning_effort
 
   if (selectedModel?.capabilities.supports.adaptive_thinking && !disableThink) {
     anthropicPayload.thinking = {
       type: "adaptive",
     }
     anthropicPayload.output_config = {
-      effort: getAnthropicEffortForModel(anthropicPayload.model),
+      effort: getAnthropicEffortForModel(anthropicPayload.model, requestEffort),
     }
   }
 
@@ -424,13 +434,11 @@ const isAsyncIterable = <T>(value: unknown): value is AsyncIterable<T> =>
 
 const getAnthropicEffortForModel = (
   model: string,
+  requestedEffort?: ReasoningEffort,
 ): "low" | "medium" | "high" | "max" => {
-  const reasoningEffort = getReasoningEffortForModel(model)
+  const reasoningEffort = requestedEffort ?? getReasoningEffortForModel(model)
 
-  if (reasoningEffort === "xhigh") return "max"
-  if (reasoningEffort === "none" || reasoningEffort === "minimal") return "low"
-
-  return reasoningEffort
+  return mapReasoningEffortToAnthropic(reasoningEffort)
 }
 
 const isCompactRequest = (

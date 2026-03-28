@@ -104,6 +104,37 @@ describe("translateAnthropicMessagesToResponsesPayload", () => {
     )
     expect(result.prompt_cache_key).toBe("7d0e2f61-4b5c-4a9d-8f11-2c3d4e5f6a7b")
   })
+
+  it("prefers request reasoning.effort over model config", () => {
+    const result = translateAnthropicMessagesToResponsesPayload({
+      ...samplePayload,
+      model: "gpt-5.4",
+      reasoning: {
+        effort: "low",
+      },
+    })
+
+    expect(result.reasoning?.effort).toBe("low")
+  })
+
+  it("supports compatibility field reasoning_effort", () => {
+    const result = translateAnthropicMessagesToResponsesPayload({
+      ...samplePayload,
+      model: "gpt-5.4",
+      reasoning_effort: "minimal",
+    })
+
+    expect(result.reasoning?.effort).toBe("minimal")
+  })
+
+  it("falls back to model reasoning effort when request effort is absent", () => {
+    const result = translateAnthropicMessagesToResponsesPayload({
+      ...samplePayload,
+      model: "gpt-5.4",
+    })
+
+    expect(result.reasoning?.effort).toBe("xhigh")
+  })
 })
 
 describe("translateResponsesResultToAnthropic", () => {

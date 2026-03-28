@@ -46,6 +46,7 @@ import {
   type AnthropicUserMessage,
 } from "./anthropic-types"
 import { normalizeToolSchema } from "./non-stream-translation"
+import { resolveRequestedReasoningEffort } from "./reasoning-effort"
 
 const MESSAGE_TYPE = "message"
 const COMPACTION_SIGNATURE_PREFIX = "cm1#"
@@ -69,6 +70,7 @@ export const translateAnthropicMessagesToResponsesPayload = (
   const { safetyIdentifier, sessionId: promptCacheKey } = parseUserIdMetadata(
     payload.metadata?.user_id,
   )
+  const requestedReasoningEffort = resolveRequestedReasoningEffort(payload)
 
   const responsesPayload: ResponsesPayload = {
     model: payload.model,
@@ -86,8 +88,9 @@ export const translateAnthropicMessagesToResponsesPayload = (
     store: false,
     parallel_tool_calls: true,
     reasoning: {
-      effort: getReasoningEffortForModel(payload.model),
-      summary: "detailed",
+      effort:
+        requestedReasoningEffort ?? getReasoningEffortForModel(payload.model),
+      summary: payload.reasoning?.summary ?? "detailed",
     },
     include: ["reasoning.encrypted_content"],
   }

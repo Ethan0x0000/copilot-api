@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from "./reasoning-effort"
+
 // Anthropic API Types
 
 export interface AnthropicMessagesPayload {
@@ -26,6 +28,12 @@ export interface AnthropicMessagesPayload {
   output_config?: {
     effort?: "low" | "medium" | "high" | "max"
   }
+  reasoning?: {
+    effort?: ReasoningEffort
+    summary?: "auto" | "concise" | "detailed"
+  }
+  // compatibility with adapters/proxies that send OpenAI-style effort as top-level
+  reasoning_effort?: ReasoningEffort
 }
 
 export interface AnthropicTextBlock {
