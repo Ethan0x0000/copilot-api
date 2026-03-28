@@ -3,6 +3,7 @@ import { events } from "fetch-event-stream"
 
 import type { SubagentMarker } from "~/routes/messages/subagent-marker"
 
+import { getAccountContext } from "~/lib/account-context"
 import {
   copilotBaseUrl,
   copilotHeaders,
@@ -372,7 +373,9 @@ export const createResponses = async (
     isCompact,
   }: ResponsesRequestOptions,
 ): Promise<CreateResponsesReturn> => {
-  if (!state.copilotToken) throw new Error("Copilot token not found")
+  const account = getAccountContext()
+  const copilotToken = account?.copilotToken ?? state.copilotToken
+  if (!copilotToken) throw new Error("Copilot token not found")
 
   const headers: Record<string, string> = {
     ...copilotHeaders(state, requestId, vision),
