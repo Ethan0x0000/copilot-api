@@ -18,6 +18,18 @@ import { tokenRoute } from "./routes/token/route"
 
 export const server = new Hono()
 
+const copilotRoutePaths = new Set([
+  "/chat/completions",
+  "/models",
+  "/embeddings",
+  "/responses",
+  "/v1/chat/completions",
+  "/v1/models",
+  "/v1/embeddings",
+  "/v1/responses",
+  "/v1/messages",
+])
+
 server.use(traceIdMiddleware)
 server.use(logger())
 server.use(cors())
@@ -51,6 +63,18 @@ server.use("*", async (c, next) => {
 
   const account = accountManager.resolveAccount(sessionId, model)
   if (!account) {
+    if (copilotRoutePaths.has(c.req.path)) {
+      return c.json(
+        {
+          error:
+            model ?
+              `No active account supports requested model: ${model}`
+            : "No active account is currently ready to serve requests",
+        },
+        503,
+      )
+    }
+
     return next()
   }
 

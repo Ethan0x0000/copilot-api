@@ -26,6 +26,9 @@ accountsRoute.get("/", async (c) => {
           status: a.status,
           plan: a.usageSummary?.planDisplay ?? null,
           activeSessions: a.activeSessions,
+          modelCatalogKnown: a.modelCatalogKnown,
+          availableModelCount: a.availableModelCount,
+          availableModels: a.availableModels,
           lastError: a.lastError ?? null,
         })),
       })
@@ -66,6 +69,9 @@ accountsRoute.get("/status", async (c) => {
           status: a.status,
           lastError: a.lastError ?? null,
           activeSessions: a.activeSessions,
+          modelCatalogKnown: a.modelCatalogKnown,
+          availableModelCount: a.availableModelCount,
+          availableModels: a.availableModels,
           plan:
             a.usageSummary ?
               {
@@ -116,6 +122,9 @@ function formatQuota(quota: {
 }
 
 async function buildSingleAccountInfo() {
+  const availableModels = state.models?.data.map((m) => m.id) ?? []
+  const modelCatalogKnown = Boolean(state.models)
+
   try {
     const usage = await getCopilotUsage()
     return {
@@ -125,6 +134,9 @@ async function buildSingleAccountInfo() {
       status: "ready",
       plan: getPlanDisplayName(usage.copilot_plan),
       activeSessions: 0,
+      modelCatalogKnown,
+      availableModelCount: availableModels.length,
+      availableModels,
       lastError: null,
     }
   } catch {
@@ -135,12 +147,18 @@ async function buildSingleAccountInfo() {
       status: state.copilotToken ? "ready" : "error",
       plan: null,
       activeSessions: 0,
+      modelCatalogKnown,
+      availableModelCount: availableModels.length,
+      availableModels,
       lastError: state.copilotToken ? null : "No token configured",
     }
   }
 }
 
 async function buildSingleAccountStatus() {
+  const availableModels = state.models?.data.map((m) => m.id) ?? []
+  const modelCatalogKnown = Boolean(state.models)
+
   try {
     const usage = await getCopilotUsage()
     const summary = extractUsageSummary(usage)
@@ -151,6 +169,9 @@ async function buildSingleAccountStatus() {
       status: "ready",
       lastError: null,
       activeSessions: 0,
+      modelCatalogKnown,
+      availableModelCount: availableModels.length,
+      availableModels,
       plan: { name: summary.planDisplay, raw: summary.plan },
       quota: {
         premium: formatQuota(summary.premium),
@@ -168,6 +189,9 @@ async function buildSingleAccountStatus() {
       lastError:
         error instanceof Error ? error.message : "Failed to fetch usage",
       activeSessions: 0,
+      modelCatalogKnown,
+      availableModelCount: availableModels.length,
+      availableModels,
       plan: null,
       quota: null,
       quotaResetDate: null,

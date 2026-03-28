@@ -6,7 +6,6 @@ import consola from "consola"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
-import { runWithAccount } from "./lib/account-context"
 import { AccountManager } from "./lib/account-manager"
 import { getAccounts, mergeConfigWithDefaults } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
@@ -157,11 +156,18 @@ export async function runServer(options: RunServerOptions): Promise<void> {
 }
 
 async function initModels(): Promise<void> {
-  if (state.accountManager?.hasAccounts()) {
-    const firstAccount = state.accountManager.resolveAccount()
-    if (firstAccount) {
-      await runWithAccount(firstAccount, () => cacheModels())
+  const accountManager = state.accountManager
+  if (accountManager?.hasAccounts()) {
+    const unionModels = accountManager.getAllAvailableModelData()
+    if (unionModels && unionModels.data.length > 0) {
+      state.models = unionModels
+      return
     }
+
+    consola.warn(
+      "No verified per-account model catalogs available; exposing empty /v1/models and failing closed for model-bound routing.",
+    )
+    state.models = { object: "list", data: [] }
   } else {
     await cacheModels()
   }

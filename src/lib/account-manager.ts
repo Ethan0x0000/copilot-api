@@ -1,5 +1,10 @@
 import consola from "consola"
 
+import {
+  getModels,
+  type Model,
+  type ModelsResponse,
+} from "~/services/copilot/get-models"
 import { getCopilotUsage } from "~/services/github/get-copilot-usage"
 
 import type { AccountContext } from "./account-context"
@@ -7,6 +12,7 @@ import type { AccountConfig } from "./config"
 import type { TierRoutingContext } from "./routing"
 import type { AccountStatus, AccountUsageSummary } from "./subscription"
 
+import { runWithAccount } from "./account-context"
 import { getRoutingConfig } from "./config"
 import { buildRoutingContext, filterAndSortByTier } from "./routing"
 import { extractUsageSummary } from "./subscription"
@@ -27,6 +33,10 @@ interface AccountState {
   status: AccountStatus
   lastError?: string
   usageSummary?: AccountUsageSummary
+  // Available models fetched from Copilot API
+  modelCatalogKnown: boolean
+  availableModels: Set<string>
+  availableModelData: Array<Model>
 }
 
 interface SessionEntry {
@@ -43,6 +53,9 @@ export interface AccountInfo {
   status: AccountStatus
   lastError?: string
   usageSummary?: AccountUsageSummary
+  modelCatalogKnown: boolean
+  availableModelCount: number
+  availableModels: Array<string>
 }
 
 export class AccountManager {
@@ -96,51 +109,99 @@ export class AccountManager {
 
     consola.info(`Setting up account: ${config.name} (${tier})`)
 
-    let accountState: AccountState
+    const accountState = await this.buildAccountState(config, accountType, tier)
 
+    this.accounts.set(config.name, accountState)
+
+    if (accountState.status === "ready") {
+      const planLabel = accountState.usageSummary?.planDisplay ?? accountType
+      consola.success(
+        `Account ${config.name} ready (${planLabel}) [${accountState.availableModels.size} models]`,
+      )
+    } else {
+      consola.warn(
+        `Account ${config.name} added with status: ${accountState.status}`,
+      )
+    }
+  }
+
+  private async buildAccountState(
+    config: AccountConfig,
+    accountType: string,
+    tier: string,
+  ): Promise<AccountState> {
     try {
       const { token, refreshIn } = await fetchCopilotTokenForAccount(
         config.githubToken,
       )
 
-      accountState = {
+      const accountContext: AccountContext = {
+        name: config.name,
+        githubToken: config.githubToken,
+        copilotToken: token,
+        accountType,
+      }
+
+      let availableModelData: Array<Model> = []
+      let modelCatalogKnown = false
+      try {
+        const models = await runWithAccount(accountContext, () => getModels())
+        availableModelData = models.data.filter(
+          (m) => m.model_picker_enabled || m.capabilities.type === "embeddings",
+        )
+        modelCatalogKnown = true
+        consola.debug(
+          `Account ${config.name}: ${availableModelData.length} models available`,
+        )
+      } catch {
+        consola.debug(`Could not fetch models for account ${config.name}`)
+      }
+
+      let usageSummary: AccountUsageSummary | undefined
+      let status: AccountStatus = "ready"
+      try {
+        const usage = await getCopilotUsage(config.githubToken)
+        usageSummary = extractUsageSummary(usage)
+
+        const premium = usage.quota_snapshots.premium_interactions
+        if (!premium.unlimited && premium.remaining <= 0) {
+          status = "quota_exhausted"
+        }
+      } catch {
+        consola.debug(`Could not fetch usage info for account ${config.name}`)
+      }
+
+      const accountState: AccountState = {
         name: config.name,
         githubToken: config.githubToken,
         copilotToken: token,
         accountType,
         tier,
         active: config.active !== false,
-        status: "ready",
+        status,
+        usageSummary,
+        modelCatalogKnown,
+        availableModels: new Set(availableModelData.map((m) => m.id)),
+        availableModelData,
       }
 
-      // Start refresh loop
       if (refreshIn > 0) {
         accountState.refreshController = startAccountRefreshLoop({
           accountName: config.name,
           githubToken: config.githubToken,
           refreshIn,
           onTokenRefreshed: (newToken) => {
-            accountState.copilotToken = newToken
+            const current = this.accounts.get(config.name)
+            if (current) {
+              current.copilotToken = newToken
+            }
           },
         })
       }
 
-      // Fetch usage/plan info (best-effort, don't fail if this errors)
-      try {
-        const usage = await getCopilotUsage(config.githubToken)
-        accountState.usageSummary = extractUsageSummary(usage)
-
-        // Check if quota is exhausted
-        const premium = usage.quota_snapshots.premium_interactions
-        if (!premium.unlimited && premium.remaining <= 0) {
-          accountState.status = "quota_exhausted"
-        }
-      } catch {
-        consola.debug(`Could not fetch usage info for account ${config.name}`)
-      }
+      return accountState
     } catch (error) {
-      // Token fetch failed — still add the account but mark as error
-      accountState = {
+      return {
         name: config.name,
         githubToken: config.githubToken,
         copilotToken: "",
@@ -150,18 +211,10 @@ export class AccountManager {
         status: "error",
         lastError:
           error instanceof Error ? error.message : "Failed to get token",
+        modelCatalogKnown: false,
+        availableModels: new Set<string>(),
+        availableModelData: [],
       }
-    }
-
-    this.accounts.set(config.name, accountState)
-
-    if (accountState.status === "ready") {
-      const planLabel = accountState.usageSummary?.planDisplay ?? accountType
-      consola.success(`Account ${config.name} ready (${planLabel})`)
-    } else {
-      consola.warn(
-        `Account ${config.name} added with status: ${accountState.status}`,
-      )
     }
   }
 
@@ -188,21 +241,38 @@ export class AccountManager {
     sessionId?: string,
     model?: string,
   ): AccountContext | undefined {
-    let activeAccounts = this.getActiveAccounts()
-    if (activeAccounts.length === 0) return undefined
+    let eligibleAccounts = this.getActiveAccounts()
+    if (eligibleAccounts.length === 0) return undefined
 
-    // Tier-based filtering: only keep accounts eligible for the requested model
     if (model) {
-      const filtered = filterAndSortByTier(
-        activeAccounts,
+      // Strict hard filter: model-bound requests only route through
+      // accounts with known model catalogs and explicit model support.
+      const accountsWithCatalog = eligibleAccounts.filter(
+        (a) => a.modelCatalogKnown,
+      )
+
+      if (accountsWithCatalog.length === 0) {
+        return undefined
+      }
+
+      const withModel = accountsWithCatalog.filter((a) =>
+        a.availableModels.has(model),
+      )
+      if (withModel.length === 0) {
+        return undefined
+      }
+      eligibleAccounts = withModel
+
+      // Soft sort: among eligible, prefer lower tiers to save premium quota.
+      eligibleAccounts = filterAndSortByTier(
+        eligibleAccounts,
         model,
         this.routingCtx,
       )
-      if (filtered.length > 0) {
-        activeAccounts = filtered
+
+      if (eligibleAccounts.length === 0) {
+        return undefined
       }
-      // If no account is eligible, fall back to all active accounts
-      // (better to serve with a potentially blocked account than to fail)
     }
 
     // Session affinity: if we have a session ID, try to reuse the same account
@@ -214,7 +284,7 @@ export class AccountManager {
         if (
           account?.active
           && account.status === "ready"
-          && activeAccounts.some((a) => a.name === account.name)
+          && eligibleAccounts.some((a) => a.name === account.name)
         ) {
           session.lastSeen = Date.now()
           return this.toContext(account)
@@ -224,7 +294,7 @@ export class AccountManager {
       }
 
       // Assign a new account for this session
-      const selectedAccount = this.selectNextAccount(activeAccounts)
+      const selectedAccount = this.selectNextAccount(eligibleAccounts)
       this.sessionMap.set(sessionId, {
         accountName: selectedAccount.name,
         lastSeen: Date.now(),
@@ -233,11 +303,52 @@ export class AccountManager {
     }
 
     // No session ID: round-robin among eligible accounts
-    return this.toContext(this.selectNextAccount(activeAccounts))
+    return this.toContext(this.selectNextAccount(eligibleAccounts))
   }
 
   hasAccounts(): boolean {
     return this.accounts.size > 0
+  }
+
+  /** Get the union of all models across all active accounts. */
+  getAllAvailableModels(): Set<string> {
+    const allModels = new Set<string>()
+    for (const account of this.accounts.values()) {
+      if (account.active && account.status === "ready") {
+        for (const model of account.availableModels) {
+          allModels.add(model)
+        }
+      }
+    }
+    return allModels
+  }
+
+  /** Get full model metadata union across all active accounts. */
+  getAllAvailableModelData(): ModelsResponse | undefined {
+    const modelMap = new Map<string, Model>()
+
+    for (const account of this.accounts.values()) {
+      if (!account.active || account.status !== "ready") {
+        continue
+      }
+
+      for (const model of account.availableModelData) {
+        if (!modelMap.has(model.id)) {
+          modelMap.set(model.id, model)
+        }
+      }
+    }
+
+    if (modelMap.size === 0) {
+      return undefined
+    }
+
+    const data = [...modelMap.values()].sort((a, b) => a.id.localeCompare(b.id))
+
+    return {
+      object: "list",
+      data,
+    }
   }
 
   listAccounts(): Array<AccountInfo> {
@@ -258,6 +369,9 @@ export class AccountManager {
         status: account.status,
         lastError: account.lastError,
         usageSummary: account.usageSummary,
+        modelCatalogKnown: account.modelCatalogKnown,
+        availableModelCount: account.availableModels.size,
+        availableModels: [...account.availableModels].sort(),
       })
     }
 

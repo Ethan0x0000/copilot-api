@@ -1,6 +1,7 @@
 import { defineCommand } from "citty"
 import consola from "consola"
 
+import { runWithAccount } from "./lib/account-context"
 import { type AccountConfig, getAccounts, saveAccounts } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
 import {
@@ -11,6 +12,8 @@ import {
   getStatusEmoji,
   getStatusLabel,
 } from "./lib/subscription"
+import { fetchCopilotTokenForAccount } from "./lib/token"
+import { getModels } from "./services/copilot/get-models"
 import { getCopilotUsage } from "./services/github/get-copilot-usage"
 import { getDeviceCode } from "./services/github/get-device-code"
 import { getGitHubUser } from "./services/github/get-user"
@@ -29,6 +32,12 @@ const accountAdd = defineCommand({
       default: "individual",
       description: "Account type (individual, business, enterprise)",
     },
+    tier: {
+      type: "string",
+      default: "pro",
+      description:
+        "Subscription tier for routing (free, student, pro, pro_plus)",
+    },
     name: {
       alias: "n",
       type: "string",
@@ -46,11 +55,9 @@ const accountAdd = defineCommand({
     let githubToken: string
 
     if (args.token) {
-      // Mode 1: direct token
       githubToken = args.token
       consola.info("Using provided GitHub token")
     } else {
-      // Mode 2: interactive device flow
       consola.info("Starting GitHub device flow authentication...")
       const response = await getDeviceCode()
 
@@ -62,7 +69,6 @@ const accountAdd = defineCommand({
       consola.success("Authentication successful!")
     }
 
-    // Resolve account name: explicit --name > GitHub username
     const accountName = await resolveAccountName(args.name, githubToken)
 
     // Fetch plan info (best-effort)
@@ -74,16 +80,18 @@ const accountAdd = defineCommand({
       consola.debug("Could not fetch plan info")
     }
 
-    // Save (upsert)
     const accounts = getAccounts()
     const existing = accounts.find((a) => a.name === accountName)
     if (existing) {
-      consola.warn(`Account "${accountName}" already exists. Updating token...`)
+      consola.warn(`Account "${accountName}" already exists. Updating...`)
       existing.githubToken = githubToken
       existing.accountType = args["account-type"]
+      existing.tier = args.tier
       existing.active = true
       saveAccounts(accounts)
-      consola.success(`Account "${accountName}" updated (${planDisplay})`)
+      consola.success(
+        `Account "${accountName}" updated [${args.tier}] (${planDisplay})`,
+      )
       return
     }
 
@@ -91,12 +99,13 @@ const accountAdd = defineCommand({
       name: accountName,
       githubToken,
       accountType: args["account-type"],
+      tier: args.tier,
       active: true,
     })
     saveAccounts(accounts)
 
     consola.success(
-      `Account "${accountName}" added [${planDisplay}] (${args["account-type"]})`,
+      `Account "${accountName}" added [${args.tier}] (${planDisplay})`,
     )
     consola.info(
       `Total accounts: ${accounts.length}. Restart the server to apply changes.`,
@@ -119,6 +128,63 @@ async function resolveAccountName(
   }
 }
 
+interface AccountModelSummary {
+  count: number
+  modelIds: Array<string>
+}
+
+async function getAccountModelSummary(
+  account: AccountConfig,
+): Promise<AccountModelSummary | undefined> {
+  try {
+    const { token } = await fetchCopilotTokenForAccount(account.githubToken)
+    const accountType = account.accountType ?? "individual"
+
+    const models = await runWithAccount(
+      {
+        name: account.name,
+        githubToken: account.githubToken,
+        copilotToken: token,
+        accountType,
+      },
+      () => getModels(),
+    )
+
+    const modelIds = models.data
+      .filter(
+        (m) => m.model_picker_enabled || m.capabilities.type === "embeddings",
+      )
+      .map((m) => m.id)
+      .sort((a, b) => a.localeCompare(b))
+
+    return {
+      count: modelIds.length,
+      modelIds,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+function formatModelSummaryLine(
+  summary: AccountModelSummary | undefined,
+): string {
+  if (!summary) {
+    return "Models: ⚠ unavailable"
+  }
+
+  if (summary.count === 0) {
+    return "Models: 0"
+  }
+
+  const previewSize = 6
+  const preview = summary.modelIds.slice(0, previewSize).join(", ")
+  const remaining = summary.count - previewSize
+  const suffix = remaining > 0 ? `, ... +${remaining}` : ""
+
+  return `Models: ${summary.count} (${preview}${suffix})`
+}
+
 const accountList = defineCommand({
   meta: {
     name: "list",
@@ -136,22 +202,21 @@ const accountList = defineCommand({
 
     consola.info(`Fetching status for ${accounts.length} account(s)...\n`)
 
-    const lines: Array<string> = []
+    const lines = await Promise.all(
+      accounts.map(async (account) => {
+        const activeLabel =
+          account.active !== false ? "\u2705 Active" : "\u26D4 Disabled"
+        const tier = account.tier ?? "pro"
+        const tokenPreview = `${account.githubToken.slice(0, 8)}...`
 
-    for (const account of accounts) {
-      const activeLabel =
-        account.active !== false ? "\u2705 Active" : "\u26D4 Disabled"
-      const tier = account.tier ?? "pro"
-      const tokenPreview = `${account.githubToken.slice(0, 8)}...`
-
-      const line = await formatAccountListEntry({
-        account,
-        tier,
-        activeLabel,
-        tokenPreview,
-      })
-      lines.push(line)
-    }
+        return formatAccountListEntry({
+          account,
+          tier,
+          activeLabel,
+          tokenPreview,
+        })
+      }),
+    )
 
     consola.log(lines.join("\n\n"))
   },
@@ -164,9 +229,18 @@ async function formatAccountListEntry(options: {
   tokenPreview: string
 }): Promise<string> {
   const { account, tier, activeLabel, tokenPreview } = options
-  try {
-    const usage = await getCopilotUsage(account.githubToken)
-    const summary = extractUsageSummary(usage)
+  const [usageResult, modelSummary] = await Promise.allSettled([
+    getCopilotUsage(account.githubToken),
+    getAccountModelSummary(account),
+  ])
+
+  const modelLine =
+    modelSummary.status === "fulfilled" ?
+      `  ${formatModelSummaryLine(modelSummary.value)}`
+    : "  Models: ⚠ unavailable"
+
+  if (usageResult.status === "fulfilled") {
+    const summary = extractUsageSummary(usageResult.value)
 
     const planLine = `  Plan: ${summary.planDisplay} (${summary.plan})`
 
@@ -195,15 +269,17 @@ async function formatAccountListEntry(options: {
       `${statusIcon} ${account.name} [${tier}] (${activeLabel})\n`
       + `  Token: ${tokenPreview}\n`
       + `${planLine}\n`
-      + quotaLine
-    )
-  } catch {
-    return (
-      `\u274C ${account.name} [${tier}] (${activeLabel})\n`
-      + `  Token: ${tokenPreview}\n`
-      + "  Plan: \u26A0 failed to fetch (token may be invalid)"
+      + `${quotaLine}\n`
+      + modelLine
     )
   }
+
+  return (
+    `\u274C ${account.name} [${tier}] (${activeLabel})\n`
+    + `  Token: ${tokenPreview}\n`
+    + "  Plan: ⚠ failed to fetch (token may be invalid)\n"
+    + modelLine
+  )
 }
 
 const accountStatus = defineCommand({
@@ -226,28 +302,45 @@ const accountStatus = defineCommand({
     )
 
     // Fetch all account statuses in parallel
-    const results = await Promise.allSettled(
+    const results = await Promise.all(
       accounts.map(async (account) => {
-        const usage = await getCopilotUsage(account.githubToken)
-        return { account, usage }
+        const [usageResult, modelSummaryResult] = await Promise.allSettled([
+          getCopilotUsage(account.githubToken),
+          getAccountModelSummary(account),
+        ])
+
+        return {
+          account,
+          usageResult,
+          modelSummary:
+            modelSummaryResult.status === "fulfilled" ?
+              modelSummaryResult.value
+            : undefined,
+        }
       }),
     )
 
     const sections: Array<string> = []
 
     for (const result of results) {
-      if (result.status === "rejected") {
+      const { account, usageResult, modelSummary } = result
+      const tier = account.tier ?? "pro"
+      const activeLabel = account.active !== false ? "active" : "disabled"
+      const modelLine = `  ${formatModelSummaryLine(modelSummary)}`
+
+      if (usageResult.status === "rejected") {
         sections.push(
-          "\u274C Unknown Account\n"
-            + `  Error: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+          [
+            `❌ ${account.name} [${tier}] - error`,
+            `  Error: ${usageResult.reason instanceof Error ? usageResult.reason.message : String(usageResult.reason)}`,
+            modelLine,
+            `  Config: ${activeLabel} | tier: ${tier} | token: ${account.githubToken.slice(0, 8)}...`,
+          ].join("\n"),
         )
         continue
       }
 
-      const { account, usage } = result.value
-      const summary = extractUsageSummary(usage)
-      const tier = account.tier ?? "pro"
-      const activeLabel = account.active !== false ? "active" : "disabled"
+      const summary = extractUsageSummary(usageResult.value)
 
       // Determine status
       let status: "ready" | "quota_exhausted" | "disabled" = "ready"
@@ -269,7 +362,7 @@ const accountStatus = defineCommand({
       const chatLine = `  ${formatQuotaLine("Chat", summary.chat)}`
       const completionsLine = `  ${formatQuotaLine("Completions", summary.completions)}`
       const resetLine = `  Reset: ${summary.resetDate}`
-      const configLine = `  Config: ${activeLabel} | token: ${account.githubToken.slice(0, 8)}...`
+      const configLine = `  Config: ${activeLabel} | tier: ${tier} | token: ${account.githubToken.slice(0, 8)}...`
 
       sections.push(
         [
@@ -280,6 +373,7 @@ const accountStatus = defineCommand({
           premiumBar,
           chatLine,
           completionsLine,
+          modelLine,
           "",
           resetLine,
           configLine,
