@@ -1,3 +1,4 @@
+import type { AccountManager } from "~/lib/account-manager"
 import type { ModelsResponse } from "~/services/copilot/get-models"
 
 export interface State {
@@ -19,6 +20,9 @@ export interface State {
   rateLimitSeconds?: number
   lastRequestTimestamp?: number
   verbose: boolean
+
+  // Multi-account
+  accountManager?: AccountManager
 }
 
 export const state: State = {

@@ -31,6 +31,7 @@ if (typeof args["enterprise-url"] === "string") {
 }
 
 // Dynamically import other modules to ensure environment variables are set
+const { account } = await import("./account")
 const { auth } = await import("./auth")
 const { checkUsage } = await import("./check-usage")
 const { debug } = await import("./debug")
@@ -42,7 +43,7 @@ const main = defineCommand({
     description:
       "A wrapper around GitHub Copilot API to make it OpenAI compatible, making it usable for other tools.",
   },
-  subCommands: { auth, start, "check-usage": checkUsage, debug },
+  subCommands: { account, auth, start, "check-usage": checkUsage, debug },
   args: cliArgs,
 })
 

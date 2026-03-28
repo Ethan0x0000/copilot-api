@@ -6,7 +6,8 @@ import consola from "consola"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
-import { mergeConfigWithDefaults } from "./lib/config"
+import { AccountManager } from "./lib/account-manager"
+import { getAccounts, mergeConfigWithDefaults } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
@@ -61,14 +62,26 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   cacheMacMachineId()
   cacheVsCodeSessionId()
 
-  if (options.githubToken) {
-    state.githubToken = options.githubToken
-    consola.info("Using provided GitHub token")
+  // Check if multi-account mode should be used
+  const accounts = getAccounts()
+  const useMultiAccount = !options.githubToken && accounts.length > 0
+
+  if (useMultiAccount) {
+    consola.info("Multi-account mode enabled")
+    const accountManager = new AccountManager()
+    await accountManager.initialize(accounts)
+    state.accountManager = accountManager
+
+    if (!accountManager.hasAccounts()) {
+      consola.error(
+        "No accounts could be initialized. Falling back to single-account mode.",
+      )
+      await setupSingleAccount(options)
+    }
   } else {
-    await setupGitHubToken()
+    await setupSingleAccount(options)
   }
 
-  await setupCopilotToken()
   await cacheModels()
 
   consola.info(
@@ -128,7 +141,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   }
 
   consola.box(
-    `🌐 Usage Viewer: ${serverUrl}/usage-viewer?endpoint=${serverUrl}/usage`,
+    `Server: ${serverUrl}\nAccounts API: ${serverUrl}/accounts\nAccounts Status: ${serverUrl}/accounts/status`,
   )
 
   const { server } = await import("./server")
@@ -140,6 +153,17 @@ export async function runServer(options: RunServerOptions): Promise<void> {
       idleTimeout: 0,
     },
   })
+}
+
+async function setupSingleAccount(options: RunServerOptions): Promise<void> {
+  if (options.githubToken) {
+    state.githubToken = options.githubToken
+    consola.info("Using provided GitHub token")
+  } else {
+    await setupGitHubToken()
+  }
+
+  await setupCopilotToken()
 }
 
 export const start = defineCommand({

@@ -1,12 +1,25 @@
-import { getGitHubApiBaseUrl, githubHeaders } from "~/lib/api-config"
+import {
+  getGitHubApiBaseUrl,
+  githubHeaders,
+  standardHeaders,
+} from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
 
-export const getCopilotToken = async () => {
+export const getCopilotToken = async (githubToken?: string) => {
+  const headers =
+    githubToken ?
+      {
+        ...standardHeaders(),
+        authorization: `token ${githubToken}`,
+        "editor-version": `vscode/${state.vsCodeVersion}`,
+      }
+    : githubHeaders(state)
+
   const response = await fetch(
     `${getGitHubApiBaseUrl()}/copilot_internal/v2/token`,
     {
-      headers: githubHeaders(state),
+      headers,
     },
   )
 

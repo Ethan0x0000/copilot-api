@@ -1,12 +1,27 @@
-import { getGitHubApiBaseUrl, githubHeaders } from "~/lib/api-config"
+import {
+  getGitHubApiBaseUrl,
+  githubHeaders,
+  standardHeaders,
+} from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
 
-export const getCopilotUsage = async (): Promise<CopilotUsageResponse> => {
+export const getCopilotUsage = async (
+  githubToken?: string,
+): Promise<CopilotUsageResponse> => {
+  const headers =
+    githubToken ?
+      {
+        ...standardHeaders(),
+        authorization: `token ${githubToken}`,
+        "editor-version": `vscode/${state.vsCodeVersion}`,
+      }
+    : githubHeaders(state)
+
   const response = await fetch(
     `${getGitHubApiBaseUrl()}/copilot_internal/user`,
     {
-      headers: githubHeaders(state),
+      headers,
     },
   )
 
@@ -28,13 +43,13 @@ export interface QuotaDetail {
   unlimited: boolean
 }
 
-interface QuotaSnapshots {
+export interface QuotaSnapshots {
   chat: QuotaDetail
   completions: QuotaDetail
   premium_interactions: QuotaDetail
 }
 
-interface CopilotUsageResponse {
+export interface CopilotUsageResponse {
   access_type_sku: string
   analytics_tracking_id: string
   assigned_date: string

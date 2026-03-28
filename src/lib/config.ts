@@ -3,7 +3,15 @@ import fs from "node:fs"
 
 import { PATHS } from "./paths"
 
+export interface AccountConfig {
+  name: string
+  githubToken: string
+  accountType?: string
+  active?: boolean
+}
+
 export interface AppConfig {
+  accounts?: Array<AccountConfig>
   auth?: {
     apiKeys?: Array<string>
   }
@@ -292,4 +300,25 @@ export function isMessagesApiEnabled(): boolean {
 export function getAnthropicApiKey(): string | undefined {
   const config = getConfig()
   return config.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? undefined
+}
+
+export function getAccounts(): Array<AccountConfig> {
+  const config = getConfig()
+  return config.accounts ?? []
+}
+
+export function saveAccounts(accounts: Array<AccountConfig>): void {
+  const config = readConfigFromDisk()
+  config.accounts = accounts
+  try {
+    fs.writeFileSync(
+      PATHS.CONFIG_PATH,
+      `${JSON.stringify(config, null, 2)}\n`,
+      "utf8",
+    )
+    cachedConfig = config
+  } catch (error) {
+    consola.error("Failed to save accounts to config file", error)
+    throw error
+  }
 }

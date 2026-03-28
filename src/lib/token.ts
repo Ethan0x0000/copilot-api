@@ -144,6 +144,90 @@ export async function setupGitHubToken(
 }
 
 async function logUser() {
-  const user = await getGitHubUser()
+  if (!state.githubToken) return
+  const user = await getGitHubUser(state.githubToken)
   consola.info(`Logged in as ${user.login}`)
+}
+
+// --- Per-account token management ---
+
+export interface AccountTokenState {
+  copilotToken: string
+  refreshController: AbortController
+}
+
+export async function fetchCopilotTokenForAccount(
+  githubToken: string,
+): Promise<{ token: string; refreshIn: number }> {
+  if (isOpencodeOauthApp()) {
+    return { token: githubToken, refreshIn: 0 }
+  }
+
+  const { token, refresh_in } = await getCopilotToken(githubToken)
+  return { token, refreshIn: refresh_in }
+}
+
+interface AccountRefreshOptions {
+  accountName: string
+  githubToken: string
+  refreshIn: number
+  onTokenRefreshed: (token: string) => void
+}
+
+export function startAccountRefreshLoop(
+  options: AccountRefreshOptions,
+): AbortController {
+  const controller = new AbortController()
+
+  if (isOpencodeOauthApp() || options.refreshIn <= 0) {
+    return controller
+  }
+
+  runAccountRefreshLoop({
+    ...options,
+    signal: controller.signal,
+  }).catch(() => {
+    consola.warn(
+      `Copilot token refresh loop stopped for account ${options.accountName}`,
+    )
+  })
+
+  return controller
+}
+
+const runAccountRefreshLoop = async (options: {
+  accountName: string
+  githubToken: string
+  refreshIn: number
+  signal: AbortSignal
+  onTokenRefreshed: (token: string) => void
+}) => {
+  const { accountName, githubToken, signal, onTokenRefreshed } = options
+  let nextRefreshDelayMs = (options.refreshIn - 60) * 1000
+
+  while (!signal.aborted) {
+    await delay(nextRefreshDelayMs, undefined, { signal })
+
+    consola.debug(`Refreshing Copilot token for account ${accountName}`)
+
+    try {
+      const { token, refresh_in } = await getCopilotToken(githubToken)
+      onTokenRefreshed(token)
+      consola.debug(`Copilot token refreshed for account ${accountName}`)
+      if (state.showToken) {
+        consola.info(`Refreshed Copilot token for ${accountName}:`, token)
+      }
+
+      nextRefreshDelayMs = (refresh_in - 60) * 1000
+    } catch (error) {
+      consola.error(
+        `Failed to refresh Copilot token for account ${accountName}:`,
+        error,
+      )
+      nextRefreshDelayMs = 15_000
+      consola.warn(
+        `Retrying Copilot token refresh for ${accountName} in ${nextRefreshDelayMs}ms`,
+      )
+    }
+  }
 }

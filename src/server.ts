@@ -1,10 +1,12 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { logger } from "hono/logger"
-import { readFileSync } from "node:fs"
 
+import { runWithAccount } from "./lib/account-context"
 import { createAuthMiddleware } from "./lib/request-auth"
+import { state } from "./lib/state"
 import { traceIdMiddleware } from "./lib/trace"
+import { accountsRoute } from "./routes/accounts/route"
 import { completionRoutes } from "./routes/chat-completions/route"
 import { embeddingRoutes } from "./routes/embeddings/route"
 import { messageRoutes } from "./routes/messages/route"
@@ -13,7 +15,6 @@ import { providerMessageRoutes } from "./routes/provider/messages/route"
 import { providerModelRoutes } from "./routes/provider/models/route"
 import { responsesRoutes } from "./routes/responses/route"
 import { tokenRoute } from "./routes/token/route"
-import { usageRoute } from "./routes/usage/route"
 
 export const server = new Hono()
 
@@ -23,21 +24,34 @@ server.use(cors())
 server.use(
   "*",
   createAuthMiddleware({
-    allowUnauthenticatedPaths: ["/", "/usage-viewer", "/usage-viewer/"],
+    allowUnauthenticatedPaths: ["/"],
   }),
 )
 
-server.get("/", (c) => c.text("Server running"))
-server.get("/usage-viewer", (c) => {
-  const usageViewerFileUrl = new URL("../pages/index.html", import.meta.url)
-  return c.html(readFileSync(usageViewerFileUrl, "utf8"))
+// Multi-account resolution middleware
+server.use("*", async (c, next) => {
+  const accountManager = state.accountManager
+  if (!accountManager?.hasAccounts()) {
+    return next()
+  }
+
+  // Extract session ID from header for session affinity
+  const sessionId = c.req.header("x-session-id")
+
+  const account = accountManager.resolveAccount(sessionId)
+  if (!account) {
+    return next()
+  }
+
+  return runWithAccount(account, () => next())
 })
-server.get("/usage-viewer/", (c) => c.redirect("/usage-viewer", 301))
+
+server.get("/", (c) => c.text("Server running"))
 
 server.route("/chat/completions", completionRoutes)
 server.route("/models", modelRoutes)
 server.route("/embeddings", embeddingRoutes)
-server.route("/usage", usageRoute)
+server.route("/accounts", accountsRoute)
 server.route("/token", tokenRoute)
 server.route("/responses", responsesRoutes)
 

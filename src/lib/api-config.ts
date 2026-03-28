@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto"
 
 import type { State } from "./state"
 
+import { getAccountContext } from "./account-context"
+
 export const isOpencodeOauthApp = (): boolean => {
   return process.env.COPILOT_API_OAUTH_APP?.trim() === "opencode"
 }
@@ -118,9 +120,12 @@ export const copilotBaseUrl = (state: State) => {
     return `https://copilot-api.${enterpriseDomain}`
   }
 
-  return state.accountType === "individual" ?
+  const account = getAccountContext()
+  const accountType = account?.accountType ?? state.accountType
+
+  return accountType === "individual" ?
       "https://api.githubcopilot.com"
-    : `https://api.${state.accountType}.githubcopilot.com`
+    : `https://api.${accountType}.githubcopilot.com`
 }
 
 export const copilotHeaders = (
@@ -128,9 +133,12 @@ export const copilotHeaders = (
   requestId?: string,
   vision: boolean = false,
 ) => {
+  const account = getAccountContext()
+  const copilotToken = account?.copilotToken ?? state.copilotToken
+
   if (isOpencodeOauthApp()) {
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${state.copilotToken}`,
+      Authorization: `Bearer ${copilotToken}`,
       ...getOpencodeOauthHeaders(),
       "Openai-Intent": "conversation-edits",
     }
@@ -142,7 +150,7 @@ export const copilotHeaders = (
 
   const requestIdValue = requestId ?? randomUUID()
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${state.copilotToken}`,
+    Authorization: `Bearer ${copilotToken}`,
     "content-type": standardHeaders()["content-type"],
     "copilot-integration-id": "vscode-chat",
     "editor-version": `vscode/${state.vsCodeVersion}`,
@@ -170,15 +178,20 @@ export const copilotHeaders = (
 }
 
 export const GITHUB_API_BASE_URL = "https://api.github.com"
-export const githubHeaders = (state: State) => ({
-  ...standardHeaders(),
-  authorization: `token ${state.githubToken}`,
-  "editor-version": `vscode/${state.vsCodeVersion}`,
-  "editor-plugin-version": EDITOR_PLUGIN_VERSION,
-  "user-agent": USER_AGENT,
-  "x-github-api-version": API_VERSION,
-  "x-vscode-user-agent-library-version": "electron-fetch",
-})
+export const githubHeaders = (state: State) => {
+  const account = getAccountContext()
+  const githubToken = account?.githubToken ?? state.githubToken
+
+  return {
+    ...standardHeaders(),
+    authorization: `token ${githubToken}`,
+    "editor-version": `vscode/${state.vsCodeVersion}`,
+    "editor-plugin-version": EDITOR_PLUGIN_VERSION,
+    "user-agent": USER_AGENT,
+    "x-github-api-version": API_VERSION,
+    "x-vscode-user-agent-library-version": "electron-fetch",
+  }
+}
 
 export const GITHUB_BASE_URL = "https://github.com"
 export const GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"

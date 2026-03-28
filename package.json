@@ -20,11 +20,12 @@
     "copilot-api": "./dist/main.js"
   },
   "files": [
-    "dist",
-    "pages"
+    "dist"
   ],
   "scripts": {
     "build": "tsdown",
+    "compile": "bun build --compile --minify --outfile=copilot-api src/main.ts",
+    "compile:linux": "bun build --compile --minify --target=bun-linux-x64 --outfile=copilot-api src/main.ts",
     "dev": "bun run --watch ./src/main.ts",
     "knip": "knip-bun",
     "lint": "eslint --cache",
