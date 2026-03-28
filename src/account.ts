@@ -19,7 +19,8 @@ import { pollAccessToken } from "./services/github/poll-access-token"
 const accountAdd = defineCommand({
   meta: {
     name: "add",
-    description: "Add a new GitHub account via device flow authentication",
+    description:
+      "Add a GitHub account (via --token or interactive device flow login)",
   },
   args: {
     "account-type": {
@@ -33,25 +34,38 @@ const accountAdd = defineCommand({
       type: "string",
       description: "Account name (defaults to GitHub username)",
     },
+    token: {
+      alias: "t",
+      type: "string",
+      description: "Provide a GitHub token directly (skip device flow)",
+    },
   },
   async run({ args }) {
     await ensurePaths()
 
-    consola.info("Starting GitHub device flow authentication...")
-    const response = await getDeviceCode()
+    let githubToken: string
 
-    consola.info(
-      `Please enter the code "${response.user_code}" in ${response.verification_uri}`,
-    )
+    if (args.token) {
+      // Mode 1: direct token
+      githubToken = args.token
+      consola.info("Using provided GitHub token")
+    } else {
+      // Mode 2: interactive device flow
+      consola.info("Starting GitHub device flow authentication...")
+      const response = await getDeviceCode()
 
-    const githubToken = await pollAccessToken(response)
-    consola.success("Authentication successful!")
+      consola.info(
+        `Please enter the code "${response.user_code}" in ${response.verification_uri}`,
+      )
 
-    // Get the GitHub username for account name
-    const user = await getGitHubUser(githubToken)
-    const accountName = args.name || user.login
+      githubToken = await pollAccessToken(response)
+      consola.success("Authentication successful!")
+    }
 
-    // Fetch plan info
+    // Resolve account name: explicit --name > GitHub username
+    const accountName = await resolveAccountName(args.name, githubToken)
+
+    // Fetch plan info (best-effort)
     let planDisplay = "unknown"
     try {
       const usage = await getCopilotUsage(githubToken)
@@ -60,7 +74,7 @@ const accountAdd = defineCommand({
       consola.debug("Could not fetch plan info")
     }
 
-    // Check for duplicates
+    // Save (upsert)
     const accounts = getAccounts()
     const existing = accounts.find((a) => a.name === accountName)
     if (existing) {
@@ -73,14 +87,12 @@ const accountAdd = defineCommand({
       return
     }
 
-    const newAccount: AccountConfig = {
+    accounts.push({
       name: accountName,
       githubToken,
       accountType: args["account-type"],
       active: true,
-    }
-
-    accounts.push(newAccount)
+    })
     saveAccounts(accounts)
 
     consola.success(
@@ -91,6 +103,21 @@ const accountAdd = defineCommand({
     )
   },
 })
+
+async function resolveAccountName(
+  explicitName: string | undefined,
+  githubToken: string,
+): Promise<string> {
+  if (explicitName) return explicitName
+
+  try {
+    const user = await getGitHubUser(githubToken)
+    return user.login
+  } catch {
+    consola.warn("Could not fetch GitHub username. Use --name to set a name.")
+    return `account-${Date.now()}`
+  }
+}
 
 const accountList = defineCommand({
   meta: {
