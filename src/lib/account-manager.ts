@@ -33,6 +33,9 @@ interface AccountState {
   status: AccountStatus
   lastError?: string
   usageSummary?: AccountUsageSummary
+  // Last request tracking
+  lastRequestTime?: number
+  lastRequestModel?: string
   // Available models fetched from Copilot API
   modelCatalogKnown: boolean
   availableModels: Set<string>
@@ -53,6 +56,8 @@ export interface AccountInfo {
   status: AccountStatus
   lastError?: string
   usageSummary?: AccountUsageSummary
+  lastRequestTime?: number
+  lastRequestModel?: string
   modelCatalogKnown: boolean
   availableModelCount: number
   availableModels: Array<string>
@@ -287,6 +292,7 @@ export class AccountManager {
           && eligibleAccounts.some((a) => a.name === account.name)
         ) {
           session.lastSeen = Date.now()
+          this.recordRequest(account, model)
           return this.toContext(account)
         }
         // Account no longer usable for this model, remove stale session
@@ -299,11 +305,14 @@ export class AccountManager {
         accountName: selectedAccount.name,
         lastSeen: Date.now(),
       })
+      this.recordRequest(selectedAccount, model)
       return this.toContext(selectedAccount)
     }
 
     // No session ID: round-robin among eligible accounts
-    return this.toContext(this.selectNextAccount(eligibleAccounts))
+    const selected = this.selectNextAccount(eligibleAccounts)
+    this.recordRequest(selected, model)
+    return this.toContext(selected)
   }
 
   hasAccounts(): boolean {
@@ -369,6 +378,8 @@ export class AccountManager {
         status: account.status,
         lastError: account.lastError,
         usageSummary: account.usageSummary,
+        lastRequestTime: account.lastRequestTime,
+        lastRequestModel: account.lastRequestModel,
         modelCatalogKnown: account.modelCatalogKnown,
         availableModelCount: account.availableModels.size,
         availableModels: [...account.availableModels].sort(),
@@ -445,6 +456,13 @@ export class AccountManager {
 
     if (pruned > 0) {
       consola.debug(`Pruned ${pruned} expired session(s)`)
+    }
+  }
+
+  private recordRequest(account: AccountState, model?: string): void {
+    account.lastRequestTime = Date.now()
+    if (model) {
+      account.lastRequestModel = model
     }
   }
 

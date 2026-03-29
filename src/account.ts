@@ -188,7 +188,7 @@ function formatModelSummaryLine(
 const accountList = defineCommand({
   meta: {
     name: "list",
-    description: "List all configured GitHub accounts with plan and quota info",
+    description: "List all configured GitHub accounts with tier and quota info",
   },
   async run() {
     await ensurePaths()
@@ -242,7 +242,7 @@ async function formatAccountListEntry(options: {
   if (usageResult.status === "fulfilled") {
     const summary = extractUsageSummary(usageResult.value)
 
-    const planLine = `  Plan: ${summary.planDisplay} (${summary.plan})`
+    const tierLine = `  Tier: ${summary.planDisplay} (${summary.plan})`
 
     const premium = summary.premium
     let quotaLine: string
@@ -268,7 +268,7 @@ async function formatAccountListEntry(options: {
     return (
       `${statusIcon} ${account.name} [${tier}] (${activeLabel})\n`
       + `  Token: ${tokenPreview}\n`
-      + `${planLine}\n`
+      + `${tierLine}\n`
       + `${quotaLine}\n`
       + modelLine
     )
@@ -277,7 +277,7 @@ async function formatAccountListEntry(options: {
   return (
     `\u274C ${account.name} [${tier}] (${activeLabel})\n`
     + `  Token: ${tokenPreview}\n`
-    + "  Plan: ⚠ failed to fetch (token may be invalid)\n"
+    + "  Tier: ⚠ failed to fetch (token may be invalid)\n"
     + modelLine
   )
 }
@@ -285,7 +285,7 @@ async function formatAccountListEntry(options: {
 const accountStatus = defineCommand({
   meta: {
     name: "status",
-    description: "Show detailed status, plan, and quota for all accounts",
+    description: "Show detailed status, tier, and quota for all accounts",
   },
   async run() {
     await ensurePaths()
@@ -354,8 +354,8 @@ const accountStatus = defineCommand({
       const statusLabel = getStatusLabel(status)
 
       const header = `${statusEmoji} ${account.name} [${tier}] - ${statusLabel}`
-      const planInfo =
-        `  Plan: ${summary.planDisplay}` + ` (raw: ${summary.plan})`
+      const tierInfo =
+        `  Tier: ${summary.planDisplay}` + ` (raw: ${summary.plan})`
 
       const premiumLine = `  ${formatQuotaLine("Premium", summary.premium)}`
       const premiumBar = `           ${formatQuotaBar(summary.premium)}`
@@ -367,7 +367,7 @@ const accountStatus = defineCommand({
       sections.push(
         [
           header,
-          planInfo,
+          tierInfo,
           "",
           premiumLine,
           premiumBar,

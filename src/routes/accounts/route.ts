@@ -25,6 +25,13 @@ accountsRoute.get("/", async (c) => {
           active: a.active,
           status: a.status,
           plan: a.usageSummary?.planDisplay ?? null,
+          lastRequest:
+            a.lastRequestTime ?
+              {
+                time: new Date(a.lastRequestTime).toISOString(),
+                model: a.lastRequestModel ?? null,
+              }
+            : null,
           activeSessions: a.activeSessions,
           modelCatalogKnown: a.modelCatalogKnown,
           availableModelCount: a.availableModelCount,
@@ -68,6 +75,13 @@ accountsRoute.get("/status", async (c) => {
           active: a.active,
           status: a.status,
           lastError: a.lastError ?? null,
+          lastRequest:
+            a.lastRequestTime ?
+              {
+                time: new Date(a.lastRequestTime).toISOString(),
+                model: a.lastRequestModel ?? null,
+              }
+            : null,
           activeSessions: a.activeSessions,
           modelCatalogKnown: a.modelCatalogKnown,
           availableModelCount: a.availableModelCount,
