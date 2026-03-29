@@ -13,6 +13,7 @@ import type { TierRoutingContext } from "./routing"
 import type { AccountStatus, AccountUsageSummary } from "./subscription"
 
 import { runWithAccount } from "./account-context"
+import { recordAccountRequest } from "./account-state"
 import { getRoutingConfig } from "./config"
 import { buildRoutingContext, filterAndSortByTier } from "./routing"
 import { extractUsageSummary } from "./subscription"
@@ -464,6 +465,7 @@ export class AccountManager {
     if (model) {
       account.lastRequestModel = model
     }
+    recordAccountRequest(account.name, model)
   }
 
   private toContext(account: AccountState): AccountContext {

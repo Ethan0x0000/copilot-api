@@ -2,6 +2,7 @@ import { defineCommand } from "citty"
 import consola from "consola"
 
 import { runWithAccount } from "./lib/account-context"
+import { getAccountRequestRecord } from "./lib/account-state"
 import { type AccountConfig, getAccounts, saveAccounts } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
 import {
@@ -185,6 +186,30 @@ function formatModelSummaryLine(
   return `Models: ${summary.count} (${preview}${suffix})`
 }
 
+function formatTimestampUTC8(ts: number): string {
+  const d = new Date(ts)
+  return d.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  })
+}
+
+function formatLastRequestLine(accountName: string): string {
+  const record = getAccountRequestRecord(accountName)
+  if (!record?.lastRequestTime) {
+    return "  Last Request: N/A"
+  }
+  const time = formatTimestampUTC8(record.lastRequestTime)
+  const model = record.lastRequestModel || "unknown"
+  return `  Last Request: ${time} (${model})`
+}
+
 const accountList = defineCommand({
   meta: {
     name: "list",
@@ -242,7 +267,7 @@ async function formatAccountListEntry(options: {
   if (usageResult.status === "fulfilled") {
     const summary = extractUsageSummary(usageResult.value)
 
-    const tierLine = `  Tier: ${summary.planDisplay} (${summary.plan})`
+    const tierLine = `  Tier: ${tier}`
 
     const premium = summary.premium
     let quotaLine: string
@@ -265,20 +290,26 @@ async function formatAccountListEntry(options: {
 
     quotaLine += `\n  Resets: ${summary.resetDate}`
 
+    const lastRequestLine = formatLastRequestLine(account.name)
+
     return (
       `${statusIcon} ${account.name} [${tier}] (${activeLabel})\n`
       + `  Token: ${tokenPreview}\n`
       + `${tierLine}\n`
       + `${quotaLine}\n`
-      + modelLine
+      + `${modelLine}\n`
+      + lastRequestLine
     )
   }
+
+  const lastRequestLine = formatLastRequestLine(account.name)
 
   return (
     `\u274C ${account.name} [${tier}] (${activeLabel})\n`
     + `  Token: ${tokenPreview}\n`
-    + "  Tier: ⚠ failed to fetch (token may be invalid)\n"
-    + modelLine
+    + "  Tier: ⚠ unknown (token may be invalid)\n"
+    + `${modelLine}\n`
+    + lastRequestLine
   )
 }
 
@@ -334,6 +365,7 @@ const accountStatus = defineCommand({
             `❌ ${account.name} [${tier}] - error`,
             `  Error: ${usageResult.reason instanceof Error ? usageResult.reason.message : String(usageResult.reason)}`,
             modelLine,
+            formatLastRequestLine(account.name),
             `  Config: ${activeLabel} | tier: ${tier} | token: ${account.githubToken.slice(0, 8)}...`,
           ].join("\n"),
         )
@@ -354,8 +386,7 @@ const accountStatus = defineCommand({
       const statusLabel = getStatusLabel(status)
 
       const header = `${statusEmoji} ${account.name} [${tier}] - ${statusLabel}`
-      const tierInfo =
-        `  Tier: ${summary.planDisplay}` + ` (raw: ${summary.plan})`
+      const tierInfo = `  Tier: ${tier} (plan: ${summary.planDisplay})`
 
       const premiumLine = `  ${formatQuotaLine("Premium", summary.premium)}`
       const premiumBar = `           ${formatQuotaBar(summary.premium)}`
@@ -363,6 +394,7 @@ const accountStatus = defineCommand({
       const completionsLine = `  ${formatQuotaLine("Completions", summary.completions)}`
       const resetLine = `  Reset: ${summary.resetDate}`
       const configLine = `  Config: ${activeLabel} | tier: ${tier} | token: ${account.githubToken.slice(0, 8)}...`
+      const lastReqLine = formatLastRequestLine(account.name)
 
       sections.push(
         [
@@ -376,6 +408,7 @@ const accountStatus = defineCommand({
           modelLine,
           "",
           resetLine,
+          lastReqLine,
           configLine,
         ].join("\n"),
       )
