@@ -15,12 +15,16 @@ const GITHUB_TOKEN_PATH = path.join(
 )
 const CONFIG_PATH = path.join(APP_DIR, "config.json")
 const ACCOUNT_STATE_PATH = path.join(APP_DIR, "account-state.json")
+const API_KEY_USAGE_PATH = path.join(APP_DIR, "api-key-usage.json")
+const API_KEY_LOGS_DIR = path.join(APP_DIR, "logs")
 
 export const PATHS = {
   APP_DIR,
   GITHUB_TOKEN_PATH,
   CONFIG_PATH,
   ACCOUNT_STATE_PATH,
+  API_KEY_USAGE_PATH,
+  API_KEY_LOGS_DIR,
 }
 
 export async function ensurePaths(): Promise<void> {

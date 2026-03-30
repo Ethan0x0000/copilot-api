@@ -14,6 +14,7 @@ import type { AccountStatus, AccountUsageSummary } from "./subscription"
 
 import { runWithAccount } from "./account-context"
 import { recordAccountRequest } from "./account-state"
+import { setApiKeyResetDate } from "./api-key-usage"
 import { getRoutingConfig } from "./config"
 import { buildRoutingContext, filterAndSortByTier } from "./routing"
 import { extractUsageSummary } from "./subscription"
@@ -417,6 +418,15 @@ export class AccountManager {
     })
 
     await Promise.allSettled(tasks)
+
+    // Sync Copilot quota reset date for API key usage tracking.
+    // Use the first account that has a known reset date.
+    for (const account of this.accounts.values()) {
+      if (account.usageSummary?.resetDate) {
+        setApiKeyResetDate(account.usageSummary.resetDate)
+        break
+      }
+    }
   }
 
   shutdown(): void {

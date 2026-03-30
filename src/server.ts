@@ -7,6 +7,7 @@ import { createAuthMiddleware } from "./lib/request-auth"
 import { state } from "./lib/state"
 import { traceIdMiddleware } from "./lib/trace"
 import { accountsRoute } from "./routes/accounts/route"
+import { apiKeysRoute } from "./routes/api-keys/route"
 import { completionRoutes } from "./routes/chat-completions/route"
 import { embeddingRoutes } from "./routes/embeddings/route"
 import { messageRoutes } from "./routes/messages/route"
@@ -87,6 +88,7 @@ server.route("/chat/completions", completionRoutes)
 server.route("/models", modelRoutes)
 server.route("/embeddings", embeddingRoutes)
 server.route("/accounts", accountsRoute)
+server.route("/api-keys", apiKeysRoute)
 server.route("/token", tokenRoute)
 server.route("/responses", responsesRoutes)
 

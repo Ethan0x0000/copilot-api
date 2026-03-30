@@ -7,6 +7,7 @@ import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
 import { AccountManager } from "./lib/account-manager"
+import { setApiKeyResetDate } from "./lib/api-key-usage"
 import { getAccounts, mergeConfigWithDefaults } from "./lib/config"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
@@ -83,6 +84,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   }
 
   await initModels()
+  await syncApiKeyResetDate()
 
   consola.info(
     `Available models: \n${state.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
@@ -182,6 +184,29 @@ async function setupSingleAccount(options: RunServerOptions): Promise<void> {
   }
 
   await setupCopilotToken()
+}
+
+/**
+ * Best-effort: fetch Copilot usage to discover the quota reset date
+ * for API key usage tracking. Non-fatal if it fails.
+ */
+async function syncApiKeyResetDate(): Promise<void> {
+  // Multi-account mode already syncs via AccountManager.refreshUsage()
+  if (state.accountManager?.hasAccounts()) return
+
+  try {
+    const { getCopilotUsage } = await import(
+      "./services/github/get-copilot-usage"
+    )
+    const usage = await getCopilotUsage()
+    if (usage.quota_reset_date) {
+      setApiKeyResetDate(usage.quota_reset_date)
+    }
+  } catch {
+    consola.debug(
+      "Could not fetch Copilot usage for API key reset date (non-fatal)",
+    )
+  }
 }
 
 export const start = defineCommand({
