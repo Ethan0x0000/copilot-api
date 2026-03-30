@@ -10,6 +10,7 @@ import {
   prepareForCompact,
   prepareInteractionHeaders,
 } from "~/lib/api-config"
+import { copilotFetchWithRetry } from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
 
@@ -391,11 +392,15 @@ export const createResponses = async (
 
   const url = `${copilotBaseUrl(state)}/responses`
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  })
+  const response = await copilotFetchWithRetry(
+    url,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    },
+    { model: payload.model, sessionId },
+  )
 
   if (!response.ok) {
     // Handle "input item ID does not belong to this connection" error.
@@ -412,11 +417,15 @@ export const createResponses = async (
         input: stripOpaqueInputItems(payload.input),
       }
 
-      const retryResponse = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(cleanedPayload),
-      })
+      const retryResponse = await copilotFetchWithRetry(
+        url,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(cleanedPayload),
+        },
+        { model: payload.model, sessionId },
+      )
 
       if (!retryResponse.ok) {
         consola.error("Retry without opaque items also failed", retryResponse)

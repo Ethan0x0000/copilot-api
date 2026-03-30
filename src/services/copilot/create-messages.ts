@@ -14,6 +14,7 @@ import {
   prepareForCompact,
   prepareInteractionHeaders,
 } from "~/lib/api-config"
+import { copilotFetchWithRetry } from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
 
@@ -110,11 +111,15 @@ export const createMessages = async (
     headers["anthropic-beta"] = anthropicBeta
   }
 
-  const response = await fetch(`${copilotBaseUrl(state)}/v1/messages`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  })
+  const response = await copilotFetchWithRetry(
+    `${copilotBaseUrl(state)}/v1/messages`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    },
+    { model: payload.model, sessionId: options.sessionId },
+  )
 
   if (!response.ok) {
     consola.error("Failed to create messages", response)
