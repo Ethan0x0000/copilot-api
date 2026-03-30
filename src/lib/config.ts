@@ -9,6 +9,8 @@ export interface AccountConfig {
   accountType?: string
   tier?: string
   active?: boolean
+  // Lower = higher priority (default 100). Account with lowest priority number is preferred.
+  priority?: number
 }
 
 export interface RoutingConfig {
