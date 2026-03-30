@@ -13,6 +13,7 @@ interface TestAccountState {
   modelCatalogKnown: boolean
   availableModels: Set<string>
   availableModelData: Array<unknown>
+  unsupportedModels: Set<string>
 }
 
 interface AccountManagerInternals {
@@ -42,6 +43,7 @@ const createAccount = (options: {
   modelCatalogKnown: options.modelCatalogKnown,
   availableModels: new Set(options.models),
   availableModelData: [],
+  unsupportedModels: new Set<string>(),
 })
 
 const seedAccounts = (
