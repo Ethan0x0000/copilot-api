@@ -39,6 +39,12 @@ const accountAdd = defineCommand({
       description:
         "Subscription tier for routing (free, student, pro, pro_plus)",
     },
+    priority: {
+      type: "string",
+      default: "100",
+      description:
+        "Priority for routing (lower = higher priority, default 100)",
+    },
     name: {
       alias: "n",
       type: "string",
@@ -88,6 +94,7 @@ const accountAdd = defineCommand({
       existing.githubToken = githubToken
       existing.accountType = args["account-type"]
       existing.tier = args.tier
+      existing.priority = Number.parseInt(args.priority, 10) || 100
       existing.active = true
       saveAccounts(accounts)
       consola.success(
@@ -101,6 +108,7 @@ const accountAdd = defineCommand({
       githubToken,
       accountType: args["account-type"],
       tier: args.tier,
+      priority: Number.parseInt(args.priority, 10) || 100,
       active: true,
     })
     saveAccounts(accounts)
@@ -267,7 +275,7 @@ async function formatAccountListEntry(options: {
   if (usageResult.status === "fulfilled") {
     const summary = extractUsageSummary(usageResult.value)
 
-    const tierLine = `  Tier: ${tier}`
+    const tierLine = `  Tier: ${tier} | Priority: ${account.priority ?? 100}`
 
     const premium = summary.premium
     let quotaLine: string
@@ -386,7 +394,7 @@ const accountStatus = defineCommand({
       const statusLabel = getStatusLabel(status)
 
       const header = `${statusEmoji} ${account.name} [${tier}] - ${statusLabel}`
-      const tierInfo = `  Tier: ${tier} (plan: ${summary.planDisplay})`
+      const tierInfo = `  Tier: ${tier} | Priority: ${account.priority ?? 100} (plan: ${summary.planDisplay})`
 
       const premiumLine = `  ${formatQuotaLine("Premium", summary.premium)}`
       const premiumBar = `           ${formatQuotaBar(summary.premium)}`
