@@ -254,50 +254,36 @@ export class AccountManager {
     return true
   }
 
+  /** Filter eligible accounts by model support and tier routing. */
+  private filterByModel(
+    accounts: Array<AccountState>,
+    model: string,
+  ): Array<AccountState> {
+    const withCatalog = accounts.filter((a) => a.modelCatalogKnown)
+    if (withCatalog.length === 0) return []
+
+    const withModel = withCatalog.filter((a) => a.availableModels.has(model))
+    if (withModel.length === 0) return []
+
+    const withoutUnsupported = withModel.filter(
+      (a) => !a.unsupportedModels.has(model),
+    )
+    if (withoutUnsupported.length === 0) return []
+
+    return filterAndSortByTier(withoutUnsupported, model, this.routingCtx)
+  }
+
   resolveAccount(
     sessionId?: string,
     model?: string,
+    record = true,
   ): AccountContext | undefined {
     let eligibleAccounts = this.getActiveAccounts()
     if (eligibleAccounts.length === 0) return undefined
 
     if (model) {
-      // Strict hard filter: model-bound requests only route through
-      // accounts with known model catalogs and explicit model support.
-      const accountsWithCatalog = eligibleAccounts.filter(
-        (a) => a.modelCatalogKnown,
-      )
-
-      if (accountsWithCatalog.length === 0) {
-        return undefined
-      }
-
-      const withModel = accountsWithCatalog.filter((a) =>
-        a.availableModels.has(model),
-      )
-      if (withModel.length === 0) {
-        return undefined
-      }
-      eligibleAccounts = withModel
-
-      // Also exclude accounts where the model was previously unavailable at runtime
-      eligibleAccounts = eligibleAccounts.filter(
-        (a) => !a.unsupportedModels.has(model),
-      )
-      if (eligibleAccounts.length === 0) {
-        return undefined
-      }
-
-      // Soft sort: among eligible, prefer lower tiers to save premium quota.
-      eligibleAccounts = filterAndSortByTier(
-        eligibleAccounts,
-        model,
-        this.routingCtx,
-      )
-
-      if (eligibleAccounts.length === 0) {
-        return undefined
-      }
+      eligibleAccounts = this.filterByModel(eligibleAccounts, model)
+      if (eligibleAccounts.length === 0) return undefined
     }
 
     // Session affinity: reuse the same account if it's still operational
@@ -313,7 +299,7 @@ export class AccountManager {
 
         if (isUsable) {
           session.lastSeen = now
-          this.recordRequest(account, model)
+          if (record) this.recordRequest(account, model)
           return this.toContext(account)
         }
 
@@ -327,13 +313,13 @@ export class AccountManager {
         accountName: selectedAccount.name,
         lastSeen: Date.now(),
       })
-      this.recordRequest(selectedAccount, model)
+      if (record) this.recordRequest(selectedAccount, model)
       return this.toContext(selectedAccount)
     }
 
     // No session ID: use best available (priority-first)
     const selected = this.selectBestAccount(eligibleAccounts)
-    this.recordRequest(selected, model)
+    if (record) this.recordRequest(selected, model)
     return this.toContext(selected)
   }
 

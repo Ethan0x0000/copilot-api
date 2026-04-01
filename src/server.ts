@@ -31,6 +31,18 @@ const copilotRoutePaths = new Set([
   "/v1/messages",
 ])
 
+/** Check whether a request path is a Copilot API route (or sub-route). */
+function isCopilotApiRoute(path: string): boolean {
+  if (copilotRoutePaths.has(path)) return true
+  // Match sub-paths like /v1/messages/count_tokens
+  for (const prefix of copilotRoutePaths) {
+    if (path.startsWith(prefix + "/")) return true
+  }
+  // Match provider routes: /:provider/v1/messages, /:provider/v1/models
+  if (/^\/[^/]+\/v1\/(?:messages|models)(?:\/|$)/.test(path)) return true
+  return false
+}
+
 server.use(traceIdMiddleware)
 server.use(logger())
 server.use(cors())
@@ -62,7 +74,11 @@ server.use("*", async (c, next) => {
     }
   }
 
-  const account = accountManager.resolveAccount(sessionId, model)
+  // Only record request tracking for actual Copilot API routes,
+  // not monitoring endpoints like /accounts, /token, /api-keys
+  const shouldRecord = isCopilotApiRoute(c.req.path)
+
+  const account = accountManager.resolveAccount(sessionId, model, shouldRecord)
   if (!account) {
     if (copilotRoutePaths.has(c.req.path)) {
       return c.json(
