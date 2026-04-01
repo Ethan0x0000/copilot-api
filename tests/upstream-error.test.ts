@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import {
   isUpstreamQuotaOrRateLimit,
   isUpstreamModelUnavailable,
+  isUpstreamServerError,
   parseRetryAfterMs,
 } from "~/lib/upstream-error"
 
@@ -77,5 +78,42 @@ describe("parseRetryAfterMs", () => {
   test("uses fallback for invalid header", () => {
     const headers = new Headers({ "retry-after": "invalid" })
     expect(parseRetryAfterMs(headers, 60_000)).toBe(60_000)
+  })
+})
+
+describe("isUpstreamServerError", () => {
+  test("returns true for 500", () => {
+    const response = new Response("Internal Server Error", { status: 500 })
+    expect(isUpstreamServerError(response)).toBe(true)
+  })
+
+  test("returns true for 502", () => {
+    const response = new Response("Bad Gateway", { status: 502 })
+    expect(isUpstreamServerError(response)).toBe(true)
+  })
+
+  test("returns true for 503", () => {
+    const response = new Response("Service Unavailable", { status: 503 })
+    expect(isUpstreamServerError(response)).toBe(true)
+  })
+
+  test("returns true for 504", () => {
+    const response = new Response("Gateway Timeout", { status: 504 })
+    expect(isUpstreamServerError(response)).toBe(true)
+  })
+
+  test("returns false for 429", () => {
+    const response = new Response("Too Many Requests", { status: 429 })
+    expect(isUpstreamServerError(response)).toBe(false)
+  })
+
+  test("returns false for 403", () => {
+    const response = new Response("Forbidden", { status: 403 })
+    expect(isUpstreamServerError(response)).toBe(false)
+  })
+
+  test("returns false for 200", () => {
+    const response = new Response("OK", { status: 200 })
+    expect(isUpstreamServerError(response)).toBe(false)
   })
 })

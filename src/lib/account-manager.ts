@@ -41,6 +41,7 @@ interface AccountState {
   // Last request tracking
   lastRequestTime?: number
   lastRequestModel?: string
+  requestCount: number
   // Available models fetched from Copilot API
   modelCatalogKnown: boolean
   availableModels: Set<string>
@@ -191,6 +192,7 @@ export class AccountManager {
         priority: config.priority,
         status,
         usageSummary,
+        requestCount: 0,
         modelCatalogKnown,
         availableModels: new Set(availableModelData.map((m) => m.id)),
         availableModelData,
@@ -224,6 +226,7 @@ export class AccountManager {
         status: "error",
         lastError:
           error instanceof Error ? error.message : "Failed to get token",
+        requestCount: 0,
         modelCatalogKnown: false,
         availableModels: new Set<string>(),
         availableModelData: [],
@@ -527,7 +530,7 @@ export class AccountManager {
   /**
    * Select the best available account from candidates.
    * Strategy: priority-first (lower number = higher priority).
-   * Among equal priorities, prefer the account with fewer active sessions.
+   * Among equal priorities, prefer the account with fewer requests.
    */
   private selectBestAccount(candidates: Array<AccountState>): AccountState {
     const sorted = [...candidates].sort((a, b) => {
@@ -535,20 +538,10 @@ export class AccountManager {
       const pb = b.priority ?? 100
       if (pa !== pb) return pa - pb
 
-      const sessionsA = this.countSessionsForAccount(a.name)
-      const sessionsB = this.countSessionsForAccount(b.name)
-      return sessionsA - sessionsB
+      return a.requestCount - b.requestCount
     })
 
     return sorted[0]
-  }
-
-  private countSessionsForAccount(accountName: string): number {
-    let count = 0
-    for (const entry of this.sessionMap.values()) {
-      if (entry.accountName === accountName) count++
-    }
-    return count
   }
 
   private pruneExpiredSessions(): void {
@@ -568,6 +561,7 @@ export class AccountManager {
   }
 
   private recordRequest(account: AccountState, model?: string): void {
+    account.requestCount++
     account.lastRequestTime = Date.now()
     if (model) {
       account.lastRequestModel = model

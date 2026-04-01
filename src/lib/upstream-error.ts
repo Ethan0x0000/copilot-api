@@ -50,6 +50,15 @@ export async function isUpstreamModelUnavailable(
 }
 
 /**
+ * Detect if an upstream response is a server error (5xx).
+ * These are usually transient (gateway timeouts, service unavailable)
+ * and should be retried with account failover.
+ */
+export function isUpstreamServerError(response: Response): boolean {
+  return response.status >= 500
+}
+
+/**
  * Parse Retry-After header value into milliseconds.
  */
 export function parseRetryAfterMs(

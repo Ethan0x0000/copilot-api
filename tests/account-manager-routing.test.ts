@@ -10,6 +10,7 @@ interface TestAccountState {
   tier: string
   active: boolean
   status: "ready" | "error" | "rate_limited" | "disabled" | "quota_exhausted"
+  requestCount: number
   modelCatalogKnown: boolean
   availableModels: Set<string>
   availableModelData: Array<unknown>
@@ -40,6 +41,7 @@ const createAccount = (options: {
   tier: options.tier,
   active: true,
   status: "ready",
+  requestCount: 0,
   modelCatalogKnown: options.modelCatalogKnown,
   availableModels: new Set(options.models),
   availableModelData: [],
@@ -151,5 +153,115 @@ describe("AccountManager.resolveAccount model routing", () => {
 
     const selected = manager.resolveAccount(undefined, "gpt-5.4")
     expect(selected?.name).toBe("pro-1")
+  })
+})
+
+describe("AccountManager.selectBestAccount usage-count balancing", () => {
+  test("selects account with fewer requests among equal priority", () => {
+    const manager = new AccountManager()
+
+    const account1 = createAccount({
+      name: "acct-1",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+    ;(account1 as TestAccountState & { requestCount: number }).requestCount = 10
+
+    const account2 = createAccount({
+      name: "acct-2",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+    ;(account2 as TestAccountState & { requestCount: number }).requestCount = 3
+
+    seedAccounts(manager, [account1, account2])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5-mini")
+    expect(selected?.name).toBe("acct-2")
+  })
+
+  test("priority takes precedence over request count", () => {
+    const manager = new AccountManager()
+
+    const account1 = createAccount({
+      name: "high-priority",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+    ;(account1 as unknown as { priority: number }).priority = 1
+    ;(account1 as TestAccountState & { requestCount: number }).requestCount =
+      100
+
+    const account2 = createAccount({
+      name: "low-priority",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+    ;(account2 as unknown as { priority: number }).priority = 50
+    ;(account2 as TestAccountState & { requestCount: number }).requestCount = 0
+
+    seedAccounts(manager, [account1, account2])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5-mini")
+    expect(selected?.name).toBe("high-priority")
+  })
+
+  test("recordRequest increments requestCount", () => {
+    const manager = new AccountManager()
+
+    const account = createAccount({
+      name: "acct-1",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+    seedAccounts(manager, [account])
+
+    manager.resolveAccount(undefined, "gpt-5-mini")
+    manager.resolveAccount(undefined, "gpt-5-mini")
+    manager.resolveAccount(undefined, "gpt-5-mini")
+
+    const internals = toInternals(manager)
+    const updatedAccount = internals.accounts.get("acct-1")
+    expect(
+      (updatedAccount as unknown as { requestCount: number }).requestCount,
+    ).toBe(3)
+  })
+
+  test("session affinity is preserved despite request-count difference", () => {
+    const manager = new AccountManager()
+
+    const account1 = createAccount({
+      name: "acct-1",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+    ;(account1 as TestAccountState & { requestCount: number }).requestCount = 50
+
+    const account2 = createAccount({
+      name: "acct-2",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+    ;(account2 as TestAccountState & { requestCount: number }).requestCount = 0
+
+    seedAccounts(manager, [account1, account2])
+
+    // First call with session creates affinity
+    const first = manager.resolveAccount("sticky-session", "gpt-5-mini")
+    const assignedAccount = first?.name
+
+    // Subsequent calls with same session must stick to the same account
+    const second = manager.resolveAccount("sticky-session", "gpt-5-mini")
+    const third = manager.resolveAccount("sticky-session", "gpt-5-mini")
+
+    expect(second?.name).toBe(assignedAccount)
+    expect(third?.name).toBe(assignedAccount)
   })
 })

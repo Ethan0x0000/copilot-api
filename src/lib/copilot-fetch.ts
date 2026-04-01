@@ -1,14 +1,18 @@
 import consola from "consola"
 
+import type { AccountManager } from "./account-manager"
+
 import { getAccountContext } from "./account-context"
 import { state } from "./state"
 import {
   isUpstreamModelUnavailable,
   isUpstreamQuotaOrRateLimit,
+  isUpstreamServerError,
   parseRetryAfterMs,
 } from "./upstream-error"
 
 const DEFAULT_COOLDOWN_MS = 90_000
+const SERVER_ERROR_COOLDOWN_MS = 30_000
 const MAX_RETRY_ATTEMPTS = 5
 
 export interface CopilotFetchRetryContext {
@@ -18,16 +22,60 @@ export interface CopilotFetchRetryContext {
   sessionId?: string
 }
 
+interface FailoverResult {
+  requestInit: RequestInit
+  accountName: string
+}
+
+interface FailoverOptions {
+  accountManager: AccountManager
+  currentInit: RequestInit
+  ctx: CopilotFetchRetryContext
+  excludedAccounts: Set<string>
+  accountName: string
+  reason: string
+}
+
+/**
+ * Resolve a failover account after an error, swapping the Authorization header.
+ * Returns the new requestInit + accountName, or undefined if no failover available.
+ */
+function resolveFailover(opts: FailoverOptions): FailoverResult | undefined {
+  const {
+    accountManager,
+    currentInit,
+    ctx,
+    excludedAccounts,
+    accountName,
+    reason,
+  } = opts
+  excludedAccounts.add(accountName)
+  consola.warn(`[copilot-fetch] ${reason}, trying failover...`)
+
+  const nextAccount = accountManager.resolveFailoverAccount(
+    ctx.sessionId,
+    ctx.model,
+    excludedAccounts,
+  )
+  if (!nextAccount) {
+    consola.warn("[copilot-fetch] No more accounts for failover")
+    return undefined
+  }
+
+  const headers = new Headers(currentInit.headers)
+  headers.set("Authorization", `Bearer ${nextAccount.copilotToken}`)
+  return {
+    requestInit: { ...currentInit, headers },
+    accountName: nextAccount.name,
+  }
+}
+
 /**
  * Fetch wrapper for upstream Copilot API calls with automatic
- * account failover on rate-limit / model-unavailable errors.
+ * account failover on rate-limit / model-unavailable / server errors.
  *
  * On success or non-retryable error, returns the Response directly.
  * On retryable error with no more accounts, returns the last error response.
- *
- * The caller provides headers that include the current account's Authorization
- * token (via copilotHeaders()). On retry, this function swaps the Authorization
- * header to the failover account's copilot token.
  */
 export async function copilotFetchWithRetry(
   url: string,
@@ -35,87 +83,94 @@ export async function copilotFetchWithRetry(
   ctx: CopilotFetchRetryContext = {},
 ): Promise<Response> {
   const accountManager = state.accountManager
-  if (!accountManager) {
-    // Single-account mode — no retry logic needed
-    return fetch(url, init)
-  }
+  const currentName = getAccountContext()?.name
+  if (!accountManager || !currentName) return fetch(url, init)
 
   let requestInit = init
+  let currentAccountName = currentName
   const excludedAccounts = new Set<string>()
-  let currentAccountName = getAccountContext()?.name
 
   for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
-    const response = await fetch(url, requestInit)
+    const tag = `attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS + 1}`
+    let response: Response
 
-    // Success or non-error — return immediately
-    if (response.ok) {
-      return response
-    }
-
-    // Check rate-limit / quota error
-    const isRateLimit = await isUpstreamQuotaOrRateLimit(response)
-    if (isRateLimit && currentAccountName) {
-      const cooldownMs = parseRetryAfterMs(
-        response.headers,
-        DEFAULT_COOLDOWN_MS,
-      )
+    try {
+      response = await fetch(url, requestInit)
+    } catch (error) {
       accountManager.markAccountCooldown(
         currentAccountName,
-        cooldownMs,
-        `Upstream rate limit (HTTP ${response.status})`,
+        SERVER_ERROR_COOLDOWN_MS,
+        `Network error: ${String(error)}`,
       )
-      excludedAccounts.add(currentAccountName)
-
-      consola.warn(
-        `[copilot-fetch] Account ${currentAccountName} rate-limited `
-          + `(attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS + 1}), trying failover...`,
-      )
-
-      const nextAccount = accountManager.resolveFailoverAccount(
-        ctx.sessionId,
-        ctx.model,
+      const failover = resolveFailover({
+        accountManager,
+        currentInit: requestInit,
+        ctx,
         excludedAccounts,
-      )
-      if (!nextAccount) {
-        consola.warn("[copilot-fetch] No more accounts for failover")
-        return response // Return the rate-limit response as-is
-      }
-
-      // Swap the Authorization header to the failover account's token
-      const headers = new Headers(requestInit.headers)
-      headers.set("Authorization", `Bearer ${nextAccount.copilotToken}`)
-      requestInit = { ...requestInit, headers }
-      currentAccountName = nextAccount.name
+        accountName: currentAccountName,
+        reason: `Account ${currentAccountName} network error (${tag})`,
+      })
+      if (!failover) throw error
+      ;({ requestInit, accountName: currentAccountName } = failover)
       continue
     }
 
-    // Check model-unavailable error
-    if (ctx.model && currentAccountName) {
-      const isModelError = await isUpstreamModelUnavailable(response)
-      if (isModelError) {
-        accountManager.markModelUnavailable(currentAccountName, ctx.model)
-        excludedAccounts.add(currentAccountName)
+    if (response.ok) return response
 
-        consola.warn(
-          `[copilot-fetch] Model ${ctx.model} unavailable for `
-            + `${currentAccountName} (attempt ${attempt + 1}), trying failover...`,
-        )
+    // Rate-limit / quota error
+    if (await isUpstreamQuotaOrRateLimit(response)) {
+      accountManager.markAccountCooldown(
+        currentAccountName,
+        parseRetryAfterMs(response.headers, DEFAULT_COOLDOWN_MS),
+        `Upstream rate limit (HTTP ${response.status})`,
+      )
+      const failover = resolveFailover({
+        accountManager,
+        currentInit: requestInit,
+        ctx,
+        excludedAccounts,
+        accountName: currentAccountName,
+        reason: `Account ${currentAccountName} rate-limited (${tag})`,
+      })
+      if (!failover) return response
+      ;({ requestInit, accountName: currentAccountName } = failover)
+      continue
+    }
 
-        const nextAccount = accountManager.resolveFailoverAccount(
-          ctx.sessionId,
-          ctx.model,
-          excludedAccounts,
-        )
-        if (!nextAccount) {
-          return response
-        }
+    // Model-unavailable error
+    if (ctx.model && (await isUpstreamModelUnavailable(response))) {
+      accountManager.markModelUnavailable(currentAccountName, ctx.model)
+      const failover = resolveFailover({
+        accountManager,
+        currentInit: requestInit,
+        ctx,
+        excludedAccounts,
+        accountName: currentAccountName,
+        reason: `Model ${ctx.model} unavailable for ${currentAccountName} (${tag})`,
+      })
+      if (!failover) return response
+      ;({ requestInit, accountName: currentAccountName } = failover)
+      continue
+    }
 
-        const headers = new Headers(requestInit.headers)
-        headers.set("Authorization", `Bearer ${nextAccount.copilotToken}`)
-        requestInit = { ...requestInit, headers }
-        currentAccountName = nextAccount.name
-        continue
-      }
+    // Server error (5xx) — transient, retry with short cooldown
+    if (isUpstreamServerError(response)) {
+      accountManager.markAccountCooldown(
+        currentAccountName,
+        SERVER_ERROR_COOLDOWN_MS,
+        `Upstream server error (HTTP ${response.status})`,
+      )
+      const failover = resolveFailover({
+        accountManager,
+        currentInit: requestInit,
+        ctx,
+        excludedAccounts,
+        accountName: currentAccountName,
+        reason: `Account ${currentAccountName} server error (HTTP ${response.status}, ${tag})`,
+      })
+      if (!failover) return response
+      ;({ requestInit, accountName: currentAccountName } = failover)
+      continue
     }
 
     // Non-retryable error — return as-is (caller will throw HTTPError)
