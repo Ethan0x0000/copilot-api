@@ -279,7 +279,9 @@ async function formatAccountListEntry(options: {
 
     const premium = summary.premium
     let quotaLine: string
-    if (premium.unlimited) {
+    if (!premium) {
+      quotaLine = "  Premium: unavailable"
+    } else if (premium.unlimited) {
       quotaLine = "  Premium: unlimited"
     } else {
       const used = premium.entitlement - premium.remaining
@@ -289,7 +291,7 @@ async function formatAccountListEntry(options: {
     }
 
     let statusIcon: string
-    if (!premium.unlimited && premium.remaining <= 0) {
+    if (premium && !premium.unlimited && premium.remaining <= 0) {
       statusIcon = "\uD83D\uDEAB"
       quotaLine += " \u26A0 EXHAUSTED"
     } else {
@@ -381,12 +383,15 @@ const accountStatus = defineCommand({
       }
 
       const summary = extractUsageSummary(usageResult.value)
+      const sPremium = summary.premium
+      const sChat = summary.chat
+      const sCompletions = summary.completions
 
       // Determine status
       let status: "ready" | "quota_exhausted" | "disabled" = "ready"
       if (account.active === false) {
         status = "disabled"
-      } else if (!summary.premium.unlimited && summary.premium.remaining <= 0) {
+      } else if (sPremium && !sPremium.unlimited && sPremium.remaining <= 0) {
         status = "quota_exhausted"
       }
 
@@ -396,10 +401,18 @@ const accountStatus = defineCommand({
       const header = `${statusEmoji} ${account.name} [${tier}] - ${statusLabel}`
       const tierInfo = `  Tier: ${tier} | Priority: ${account.priority ?? 100} (plan: ${summary.planDisplay})`
 
-      const premiumLine = `  ${formatQuotaLine("Premium", summary.premium)}`
-      const premiumBar = `           ${formatQuotaBar(summary.premium)}`
-      const chatLine = `  ${formatQuotaLine("Chat", summary.chat)}`
-      const completionsLine = `  ${formatQuotaLine("Completions", summary.completions)}`
+      const premiumLine =
+        sPremium ?
+          `  ${formatQuotaLine("Premium", sPremium)}`
+        : "  Premium: unavailable"
+      const premiumBar =
+        sPremium ? `           ${formatQuotaBar(sPremium)}` : ""
+      const chatLine =
+        sChat ? `  ${formatQuotaLine("Chat", sChat)}` : "  Chat: unavailable"
+      const completionsLine =
+        sCompletions ?
+          `  ${formatQuotaLine("Completions", sCompletions)}`
+        : "  Completions: unavailable"
       const resetLine = `  Reset: ${summary.resetDate}`
       const configLine = `  Config: ${activeLabel} | tier: ${tier} | token: ${account.githubToken.slice(0, 8)}...`
       const lastReqLine = formatLastRequestLine(account.name)
