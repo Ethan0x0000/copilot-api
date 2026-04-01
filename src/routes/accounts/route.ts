@@ -96,9 +96,16 @@ accountsRoute.get("/status", async (c) => {
           quota:
             a.usageSummary ?
               {
-                premium: formatQuota(a.usageSummary.premium),
-                chat: formatQuota(a.usageSummary.chat),
-                completions: formatQuota(a.usageSummary.completions),
+                premium:
+                  a.usageSummary.premium ?
+                    formatQuota(a.usageSummary.premium)
+                  : null,
+                chat:
+                  a.usageSummary.chat ? formatQuota(a.usageSummary.chat) : null,
+                completions:
+                  a.usageSummary.completions ?
+                    formatQuota(a.usageSummary.completions)
+                  : null,
               }
             : null,
           quotaResetDate: a.usageSummary?.resetDate ?? null,
@@ -188,9 +195,10 @@ async function buildSingleAccountStatus() {
       availableModels,
       plan: { name: summary.planDisplay, raw: summary.plan },
       quota: {
-        premium: formatQuota(summary.premium),
-        chat: formatQuota(summary.chat),
-        completions: formatQuota(summary.completions),
+        premium: summary.premium ? formatQuota(summary.premium) : null,
+        chat: summary.chat ? formatQuota(summary.chat) : null,
+        completions:
+          summary.completions ? formatQuota(summary.completions) : null,
       },
       quotaResetDate: summary.resetDate,
     }

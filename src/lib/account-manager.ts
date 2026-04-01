@@ -174,8 +174,8 @@ export class AccountManager {
         const usage = await getCopilotUsage(config.githubToken)
         usageSummary = extractUsageSummary(usage)
 
-        const premium = usage.quota_snapshots.premium_interactions
-        if (!premium.unlimited && premium.remaining <= 0) {
+        const premium = usage.quota_snapshots?.premium_interactions
+        if (premium && !premium.unlimited && premium.remaining <= 0) {
           status = "quota_exhausted"
         }
       } catch {
@@ -474,18 +474,20 @@ export class AccountManager {
         // eslint-disable-next-line require-atomic-updates
         account.usageSummary = extractUsageSummary(usage)
 
-        const premium = usage.quota_snapshots.premium_interactions
-        if (
-          !premium.unlimited
-          && premium.remaining <= 0
-          && account.status === "ready"
-        ) {
-          account.status = "quota_exhausted"
-        } else if (
-          account.status === "quota_exhausted"
-          && premium.remaining > 0
-        ) {
-          account.status = "ready"
+        const premium = usage.quota_snapshots?.premium_interactions
+        if (premium) {
+          if (
+            !premium.unlimited
+            && premium.remaining <= 0
+            && account.status === "ready"
+          ) {
+            account.status = "quota_exhausted"
+          } else if (
+            account.status === "quota_exhausted"
+            && premium.remaining > 0
+          ) {
+            account.status = "ready"
+          }
         }
       } catch (error) {
         consola.debug(`Failed to refresh usage for ${name}:`, error)

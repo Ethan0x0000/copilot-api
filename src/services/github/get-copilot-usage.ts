@@ -59,5 +59,5 @@ export interface CopilotUsageResponse {
   organization_login_list: Array<unknown>
   organization_list: Array<unknown>
   quota_reset_date: string
-  quota_snapshots: QuotaSnapshots
+  quota_snapshots?: QuotaSnapshots
 }

@@ -21,26 +21,34 @@ export const checkUsage = defineCommand({
     try {
       const usage = await getCopilotUsage()
       const planDisplay = getPlanDisplayName(usage.copilot_plan)
-      const premium = usage.quota_snapshots.premium_interactions
 
-      const premiumLine = formatQuotaLine("Premium", premium)
-      const premiumBar = `         ${formatQuotaBar(premium)}`
-      const chatLine = formatQuotaLine("Chat", usage.quota_snapshots.chat)
-      const completionsLine = formatQuotaLine(
-        "Completions",
-        usage.quota_snapshots.completions,
-      )
+      const lines: Array<string> = [
+        `Copilot Usage`,
+        `Plan: ${planDisplay} (${usage.copilot_plan})`,
+        `Quota resets: ${usage.quota_reset_date}`,
+        `\nQuotas:`,
+      ]
 
-      consola.box(
-        `Copilot Usage\n`
-          + `Plan: ${planDisplay} (${usage.copilot_plan})\n`
-          + `Quota resets: ${usage.quota_reset_date}\n`
-          + `\nQuotas:\n`
-          + `  ${premiumLine}\n`
-          + `  ${premiumBar}\n`
-          + `  ${chatLine}\n`
-          + `  ${completionsLine}`,
-      )
+      if (usage.quota_snapshots) {
+        const premium = usage.quota_snapshots.premium_interactions
+        const premiumLine = formatQuotaLine("Premium", premium)
+        const premiumBar = `         ${formatQuotaBar(premium)}`
+        const chatLine = formatQuotaLine("Chat", usage.quota_snapshots.chat)
+        const completionsLine = formatQuotaLine(
+          "Completions",
+          usage.quota_snapshots.completions,
+        )
+        lines.push(
+          `  ${premiumLine}`,
+          `  ${premiumBar}`,
+          `  ${chatLine}`,
+          `  ${completionsLine}`,
+        )
+      } else {
+        lines.push(`  (quota information unavailable)`)
+      }
+
+      consola.box(lines.join("\n"))
     } catch (err) {
       consola.error("Failed to fetch Copilot usage:", err)
       process.exit(1)

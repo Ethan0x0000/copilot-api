@@ -125,9 +125,9 @@ export interface AccountUsageSummary {
   plan: string
   planDisplay: string
   resetDate: string
-  premium: QuotaDetail
-  chat: QuotaDetail
-  completions: QuotaDetail
+  premium?: QuotaDetail
+  chat?: QuotaDetail
+  completions?: QuotaDetail
 }
 
 export function extractUsageSummary(
@@ -137,8 +137,8 @@ export function extractUsageSummary(
     plan: usage.copilot_plan,
     planDisplay: getPlanDisplayName(usage.copilot_plan),
     resetDate: usage.quota_reset_date,
-    premium: usage.quota_snapshots.premium_interactions,
-    chat: usage.quota_snapshots.chat,
-    completions: usage.quota_snapshots.completions,
+    premium: usage.quota_snapshots?.premium_interactions,
+    chat: usage.quota_snapshots?.chat,
+    completions: usage.quota_snapshots?.completions,
   }
 }
