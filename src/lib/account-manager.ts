@@ -22,6 +22,8 @@ import { fetchCopilotTokenForAccount, startAccountRefreshLoop } from "./token"
 
 const SESSION_TTL_MS = 30 * 60 * 1000 // 30 minutes
 const SESSION_PRUNE_INTERVAL_MS = 5 * 60 * 1000 // prune every 5 minutes
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+const REFRESH_IDLE_THRESHOLD_MS = 5 * 60 * 1000 // pause if idle > 5 minutes
 
 interface AccountState {
   name: string
@@ -74,6 +76,8 @@ export class AccountManager {
   private accounts = new Map<string, AccountState>()
   private sessionMap = new Map<string, SessionEntry>()
   private pruneTimer: ReturnType<typeof setInterval> | null = null
+  private refreshTimer: ReturnType<typeof setInterval> | null = null
+  private lastActivityTime = 0
   private routingCtx: TierRoutingContext
 
   constructor() {
@@ -112,6 +116,27 @@ export class AccountManager {
     this.pruneTimer = setInterval(() => {
       this.pruneExpiredSessions()
     }, SESSION_PRUNE_INTERVAL_MS)
+
+    // Start activity-gated quota refresh loop
+    this.startRefreshLoop()
+  }
+
+  startRefreshLoop(): void {
+    if (this.refreshTimer) return
+
+    this.refreshTimer = setInterval(() => {
+      const idleMs = Date.now() - this.lastActivityTime
+      if (this.lastActivityTime > 0 && idleMs < REFRESH_IDLE_THRESHOLD_MS) {
+        void this.refreshUsage()
+      }
+    }, REFRESH_INTERVAL_MS)
+  }
+
+  stopRefreshLoop(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer)
+      this.refreshTimer = null
+    }
   }
 
   async addAccount(config: AccountConfig): Promise<void> {
@@ -493,6 +518,8 @@ export class AccountManager {
   }
 
   shutdown(): void {
+    this.stopRefreshLoop()
+
     for (const account of this.accounts.values()) {
       account.refreshController?.abort()
     }
@@ -558,8 +585,12 @@ export class AccountManager {
   }
 
   private recordRequest(account: AccountState, model?: string): void {
+    const now = Date.now()
+
     account.requestCount++
-    account.lastRequestTime = Date.now()
+    account.lastRequestTime = now
+    this.lastActivityTime = now
+
     if (model) {
       account.lastRequestModel = model
     }

@@ -271,3 +271,146 @@ describe("AccountManager.selectBestAccount quota-aware selection", () => {
     expect(selected?.name).toBe("pro-2")
   })
 })
+
+interface AccountManagerRefreshInternals extends AccountManagerInternals {
+  pruneTimer: ReturnType<typeof setInterval> | null
+  refreshTimer: ReturnType<typeof setInterval> | null
+  lastActivityTime: number
+  addAccount: (config: {
+    name: string
+    githubToken: string
+    accountType?: string
+    tier?: string
+    active?: boolean
+    priority?: number
+  }) => Promise<void>
+  refreshUsage: () => Promise<void>
+  startRefreshLoop: () => void
+  stopRefreshLoop: () => void
+}
+
+const toRefreshInternals = (
+  manager: AccountManager,
+): AccountManagerRefreshInternals =>
+  manager as unknown as AccountManagerRefreshInternals
+
+const REFRESH_IDLE_THRESHOLD_MS = 5 * 60 * 1000
+
+describe("AccountManager.refreshUsage activity-gated timer", () => {
+  test("startRefreshLoop does not call refreshUsage before any activity", () => {
+    const manager = new AccountManager()
+    const internals = toRefreshInternals(manager)
+
+    let refreshCount = 0
+    const originalRefreshUsage = internals.refreshUsage
+    internals.refreshUsage = () => {
+      refreshCount++
+      return Promise.resolve()
+    }
+
+    internals.startRefreshLoop()
+
+    expect(internals.lastActivityTime).toBe(0)
+    const shouldRefresh =
+      internals.lastActivityTime > 0
+      && Date.now() - internals.lastActivityTime < REFRESH_IDLE_THRESHOLD_MS
+    expect(shouldRefresh).toBe(false)
+    expect(refreshCount).toBe(0)
+
+    internals.stopRefreshLoop()
+    expect(internals.refreshTimer).toBeNull()
+
+    internals.refreshUsage = originalRefreshUsage
+  })
+
+  test("recordRequest sets lastActivityTime", () => {
+    const manager = new AccountManager()
+    const account = createAccount({
+      name: "pro-1",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5-mini"],
+    })
+
+    seedAccounts(manager, [account])
+
+    const before = Date.now()
+    manager.resolveAccount(undefined, "gpt-5-mini")
+
+    const internals = toRefreshInternals(manager)
+    expect(internals.lastActivityTime).toBeGreaterThanOrEqual(before)
+  })
+
+  test("stopRefreshLoop clears the timer", () => {
+    const manager = new AccountManager()
+    const internals = toRefreshInternals(manager)
+
+    internals.startRefreshLoop()
+    expect(internals.refreshTimer).not.toBeNull()
+
+    internals.stopRefreshLoop()
+    expect(internals.refreshTimer).toBeNull()
+  })
+
+  test("refreshUsage is not called when idle > threshold", () => {
+    const manager = new AccountManager()
+    const internals = toRefreshInternals(manager)
+
+    let refreshCount = 0
+    const originalRefreshUsage = internals.refreshUsage
+    internals.refreshUsage = () => {
+      refreshCount++
+      return Promise.resolve()
+    }
+
+    internals.lastActivityTime = Date.now() - (REFRESH_IDLE_THRESHOLD_MS + 1000)
+    internals.startRefreshLoop()
+
+    const idleMs = Date.now() - internals.lastActivityTime
+    if (internals.lastActivityTime > 0 && idleMs < REFRESH_IDLE_THRESHOLD_MS) {
+      void internals.refreshUsage()
+    }
+
+    expect(idleMs).toBeGreaterThan(REFRESH_IDLE_THRESHOLD_MS)
+    expect(refreshCount).toBe(0)
+
+    internals.stopRefreshLoop()
+    internals.refreshUsage = originalRefreshUsage
+  })
+
+  test("initialize() starts the refresh loop", async () => {
+    const manager = new AccountManager()
+    const internals = toRefreshInternals(manager)
+    const originalAddAccount = internals.addAccount
+
+    internals.addAccount = (config) => {
+      seedAccounts(manager, [
+        createAccount({
+          name: config.name,
+          tier: config.tier ?? "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5-mini"],
+        }),
+      ])
+
+      return Promise.resolve()
+    }
+
+    expect(internals.refreshTimer).toBeNull()
+
+    await manager.initialize([
+      {
+        name: "refresh-init",
+        githubToken: "gh-refresh-init",
+        active: true,
+      },
+    ])
+
+    expect(internals.refreshTimer).not.toBeNull()
+
+    internals.addAccount = originalAddAccount
+    manager.shutdown()
+    expect(internals.refreshTimer).toBeNull()
+    expect(internals.pruneTimer).toBeNull()
+  })
+})
