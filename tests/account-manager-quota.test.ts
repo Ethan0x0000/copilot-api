@@ -584,7 +584,7 @@ describe("AccountManager integration — full load balancing flow", () => {
     expect(picks[0]).toBe("pro-1")
   })
 
-  test("2. quota distribution: new sessions go to accounts with most remaining quota", () => {
+  test("2. quota distribution: new sessions go to highest-quota account, then next-highest after quota drops", () => {
     const manager = new AccountManager()
 
     seedAccounts(manager, [
@@ -626,11 +626,24 @@ describe("AccountManager integration — full load balancing flow", () => {
       ),
     ])
 
+    // First new session goes to the account with highest quota (pro-1, 200)
     const first = manager.resolveAccount("session-1", "gpt-5.4")
-    const second = manager.resolveAccount("session-2", "gpt-5.4")
-
     expect(first?.name).toBe("pro-1")
-    expect(second?.name).toBe("pro-1")
+
+    // Simulate pro-1's quota dropping below pro-2 (e.g., after a refresh)
+    const internals = toInternals(manager)
+    const pro1 = internals.accounts.get("pro-1")
+    if (pro1?.usageSummary?.premium) {
+      pro1.usageSummary.premium.remaining = 120 // now 120 < pro-2's 150
+    }
+
+    // Second NEW session should go to pro-2 (now highest: 150 > 120)
+    const second = manager.resolveAccount("session-2", "gpt-5.4")
+    expect(second?.name).toBe("pro-2")
+
+    // But session-1 sticks to pro-1 (session affinity)
+    const firstAgain = manager.resolveAccount("session-1", "gpt-5.4")
+    expect(firstAgain?.name).toBe("pro-1")
   })
 
   test("3. failover recovery: after failover, session sticks to new account", () => {
@@ -702,7 +715,7 @@ describe("AccountManager integration — full load balancing flow", () => {
     expect(selected).toBeUndefined()
   })
 
-  test("5. tier isolation: pro-only model request only considers pro accounts", () => {
+  test("5. tier+quota integration: pro-only model picks highest-quota pro account, session sticks despite student having more quota", () => {
     const manager = new AccountManager()
     const internals = toInternals(manager)
 
@@ -711,6 +724,8 @@ describe("AccountManager integration — full load balancing flow", () => {
       modelTierRequirements: { "gpt-5.4": "pro" },
     }
 
+    // Student has HIGHEST quota overall (500), but model requires pro tier
+    // Among pro accounts, pro-1 has more remaining quota than pro-2
     seedAccounts(manager, [
       withQuota(
         createAccount({
@@ -741,9 +756,18 @@ describe("AccountManager integration — full load balancing flow", () => {
       ),
     ])
 
-    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+    // First call: should go to pro-1 (highest quota among pro accounts, student excluded)
+    const first = manager.resolveAccount("user-session", "gpt-5.4")
+    expect(first?.name).toBe("pro-1")
+    expect(first?.name).not.toBe("student-1")
 
-    expect(selected?.name).toBe("pro-1")
-    expect(selected?.name).not.toBe("student-1")
+    // Second call same session: sticks to pro-1 (session affinity)
+    const second = manager.resolveAccount("user-session", "gpt-5.4")
+    expect(second?.name).toBe("pro-1")
+
+    // Third call NEW session: new session also picks pro-1 (still highest quota)
+    const newSession = manager.resolveAccount("new-session", "gpt-5.4")
+    expect(newSession?.name).toBe("pro-1")
+    expect(newSession?.name).not.toBe("student-1")
   })
 })
