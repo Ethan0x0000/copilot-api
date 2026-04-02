@@ -414,3 +414,128 @@ describe("AccountManager.refreshUsage activity-gated timer", () => {
     expect(internals.pruneTimer).toBeNull()
   })
 })
+
+interface AccountManagerFailoverInternals extends AccountManagerInternals {
+  sessionMap: Map<string, { accountName: string; lastSeen: number }>
+}
+
+const toFailoverInternals = (
+  manager: AccountManager,
+): AccountManagerFailoverInternals =>
+  manager as unknown as AccountManagerFailoverInternals
+
+describe("AccountManager.resolveFailoverAccount session remapping", () => {
+  test("resolveFailoverAccount updates sessionMap to the new account", () => {
+    const manager = new AccountManager()
+    seedAccounts(manager, [
+      withPriority(
+        createAccount({
+          name: "pro-1",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        1,
+      ),
+      withPriority(
+        createAccount({
+          name: "pro-2",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        2,
+      ),
+    ])
+
+    const internals = toFailoverInternals(manager)
+
+    const initial = manager.resolveAccount("my-session", "gpt-5.4")
+    expect(initial?.name).toBe("pro-1")
+    expect(internals.sessionMap.get("my-session")?.accountName).toBe("pro-1")
+
+    const failover = manager.resolveFailoverAccount(
+      "my-session",
+      "gpt-5.4",
+      new Set(["pro-1"]),
+    )
+
+    expect(failover?.name).toBe("pro-2")
+    expect(internals.sessionMap.get("my-session")?.accountName).toBe("pro-2")
+  })
+
+  test("after failover, resolveAccount returns the remapped account for the same session", () => {
+    const manager = new AccountManager()
+    seedAccounts(manager, [
+      withPriority(
+        createAccount({
+          name: "pro-1",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        1,
+      ),
+      withPriority(
+        createAccount({
+          name: "pro-2",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        2,
+      ),
+    ])
+
+    const first = manager.resolveAccount("sticky-session", "gpt-5.4")
+    if (!first) throw new Error("expected initial account assignment")
+    expect(first.name).toBe("pro-1")
+
+    const failover = manager.resolveFailoverAccount(
+      "sticky-session",
+      "gpt-5.4",
+      new Set([first.name]),
+    )
+
+    expect(failover?.name).toBe("pro-2")
+
+    const remapped = manager.resolveAccount("sticky-session", "gpt-5.4")
+    expect(remapped?.name).toBe("pro-2")
+    expect(remapped?.name).not.toBe(first.name)
+  })
+
+  test("failover without sessionId still selects a replacement account", () => {
+    const manager = new AccountManager()
+    seedAccounts(manager, [
+      withPriority(
+        createAccount({
+          name: "pro-1",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        1,
+      ),
+      withPriority(
+        createAccount({
+          name: "pro-2",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        2,
+      ),
+    ])
+
+    const internals = toFailoverInternals(manager)
+
+    const failover = manager.resolveFailoverAccount(
+      undefined,
+      "gpt-5.4",
+      new Set(["pro-1"]),
+    )
+
+    expect(failover?.name).toBe("pro-2")
+    expect(internals.sessionMap.size).toBe(0)
+  })
+})
