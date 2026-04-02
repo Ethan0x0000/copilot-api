@@ -6,6 +6,7 @@ import { runWithAccount } from "./lib/account-context"
 import { createAuthMiddleware } from "./lib/request-auth"
 import { state } from "./lib/state"
 import { traceIdMiddleware } from "./lib/trace"
+import { getUUID, parseUserIdMetadata } from "./lib/utils"
 import { accountsRoute } from "./routes/accounts/route"
 import { apiKeysRoute } from "./routes/api-keys/route"
 import { completionRoutes } from "./routes/chat-completions/route"
@@ -60,15 +61,25 @@ server.use("*", async (c, next) => {
     return next()
   }
 
-  const sessionId = c.req.header("x-session-id")
+  let sessionId = c.req.header("x-session-id") ?? undefined
 
   // Extract model from request body for tier-based routing
   let model: string | undefined
   if (c.req.method === "POST") {
     try {
       const cloned = c.req.raw.clone()
-      const body = (await cloned.json()) as { model?: string }
+      const body = (await cloned.json()) as {
+        model?: string
+        metadata?: { user_id?: string }
+      }
       model = body.model
+
+      if (!sessionId && body.metadata?.user_id) {
+        const parsed = parseUserIdMetadata(body.metadata.user_id)
+        if (parsed.sessionId) {
+          sessionId = getUUID(parsed.sessionId)
+        }
+      }
     } catch {
       // Not JSON or no model field — fine
     }
