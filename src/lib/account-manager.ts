@@ -521,7 +521,16 @@ export class AccountManager {
    * Among equal priorities, prefer the account with fewer requests.
    */
   private selectBestAccount(candidates: Array<AccountState>): AccountState {
+    const getRemainingScore = (acct: AccountState): number => {
+      if (acct.usageSummary?.premium?.unlimited) return Infinity
+      return acct.usageSummary?.premium?.remaining ?? -Infinity
+    }
+
     const sorted = [...candidates].sort((a, b) => {
+      const ra = getRemainingScore(a)
+      const rb = getRemainingScore(b)
+      if (ra !== rb) return rb - ra
+
       const pa = a.priority ?? 100
       const pb = b.priority ?? 100
       if (pa !== pb) return pa - pb
