@@ -544,8 +544,7 @@ export class AccountManager {
 
   /**
    * Select the best available account from candidates.
-   * Strategy: priority-first (lower number = higher priority).
-   * Among equal priorities, prefer the account with fewer requests.
+   * Strategy: quota-remaining-first (higher premium.remaining wins), then priority, then requestCount.
    */
   private selectBestAccount(candidates: Array<AccountState>): AccountState {
     const getRemainingScore = (acct: AccountState): number => {
