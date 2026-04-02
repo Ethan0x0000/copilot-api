@@ -539,3 +539,211 @@ describe("AccountManager.resolveFailoverAccount session remapping", () => {
     expect(internals.sessionMap.size).toBe(0)
   })
 })
+
+describe("AccountManager integration — full load balancing flow", () => {
+  test("1. session affinity: same session always gets same account over 5 calls", () => {
+    const manager = new AccountManager()
+
+    seedAccounts(manager, [
+      withQuota(
+        createAccount({
+          name: "pro-1",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 200, entitlement: 300, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-2",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 150, entitlement: 300, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-3",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 100, entitlement: 300, unlimited: false },
+      ),
+    ])
+
+    const picks = Array.from(
+      { length: 5 },
+      () => manager.resolveAccount("user-session-A", "gpt-5.4")?.name,
+    )
+
+    expect(picks).toHaveLength(5)
+    expect(new Set(picks).size).toBe(1)
+    expect(picks[0]).toBe("pro-1")
+  })
+
+  test("2. quota distribution: new sessions go to accounts with most remaining quota", () => {
+    const manager = new AccountManager()
+
+    seedAccounts(manager, [
+      withQuota(
+        createAccount({
+          name: "pro-1",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 200, entitlement: 300, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-2",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 150, entitlement: 300, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-3",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 100, entitlement: 300, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-4",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 50, entitlement: 300, unlimited: false },
+      ),
+    ])
+
+    const first = manager.resolveAccount("session-1", "gpt-5.4")
+    const second = manager.resolveAccount("session-2", "gpt-5.4")
+
+    expect(first?.name).toBe("pro-1")
+    expect(second?.name).toBe("pro-1")
+  })
+
+  test("3. failover recovery: after failover, session sticks to new account", () => {
+    const manager = new AccountManager()
+
+    seedAccounts(manager, [
+      withQuota(
+        createAccount({
+          name: "pro-1",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 200, entitlement: 300, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-2",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 100, entitlement: 300, unlimited: false },
+      ),
+    ])
+
+    const initial = manager.resolveAccount("session-failover", "gpt-5.4")
+    expect(initial?.name).toBe("pro-1")
+
+    manager.markAccountCooldown("pro-1", 60_000, "test cooldown")
+
+    const afterCooldown = manager.resolveAccount("session-failover", "gpt-5.4")
+    expect(afterCooldown?.name).toBe("pro-2")
+
+    const stableAfterFailover = manager.resolveAccount(
+      "session-failover",
+      "gpt-5.4",
+    )
+    expect(stableAfterFailover?.name).toBe("pro-2")
+  })
+
+  test("4. all accounts exhausted: resolveAccount returns undefined", () => {
+    const manager = new AccountManager()
+
+    seedAccounts(manager, [
+      createAccount({
+        name: "pro-1",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["gpt-5.4"],
+      }),
+      createAccount({
+        name: "pro-2",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["gpt-5.4"],
+      }),
+    ])
+
+    const internals = toInternals(manager)
+    const pro1 = internals.accounts.get("pro-1")
+    const pro2 = internals.accounts.get("pro-2")
+    if (!pro1 || !pro2) throw new Error("expected seeded pro accounts")
+
+    pro1.status = "quota_exhausted"
+    pro2.status = "quota_exhausted"
+
+    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+    expect(selected).toBeUndefined()
+  })
+
+  test("5. tier isolation: pro-only model request only considers pro accounts", () => {
+    const manager = new AccountManager()
+    const internals = toInternals(manager)
+
+    internals.routingCtx = {
+      tierPriority: ["free", "student", "pro", "pro_plus"],
+      modelTierRequirements: { "gpt-5.4": "pro" },
+    }
+
+    seedAccounts(manager, [
+      withQuota(
+        createAccount({
+          name: "student-1",
+          tier: "student",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 500, entitlement: 500, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-1",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 200, entitlement: 300, unlimited: false },
+      ),
+      withQuota(
+        createAccount({
+          name: "pro-2",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        { remaining: 100, entitlement: 300, unlimited: false },
+      ),
+    ])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+
+    expect(selected?.name).toBe("pro-1")
+    expect(selected?.name).not.toBe("student-1")
+  })
+})
