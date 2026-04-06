@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 
 import type { AnthropicMessagesPayload } from "~/routes/messages/anthropic-types"
 import type {
+  ResponseFunctionCallOutputItem,
   ResponseInputMessage,
   ResponsesResult,
 } from "~/services/copilot/create-responses"
@@ -134,6 +135,45 @@ describe("translateAnthropicMessagesToResponsesPayload", () => {
     })
 
     expect(result.reasoning?.effort).toBe("xhigh")
+  })
+
+  it("maps tool_reference tool results into function_call_output text", () => {
+    const result = translateAnthropicMessagesToResponsesPayload({
+      model: "gpt-4.1",
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_1",
+              content: [
+                {
+                  type: "tool_reference",
+                  tool_name: "AskUserQuestion",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as AnthropicMessagesPayload)
+
+    const input = result.input as Array<ResponseFunctionCallOutputItem>
+    expect(input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: [
+          {
+            type: "input_text",
+            text: "Tool AskUserQuestion loaded",
+          },
+        ],
+        status: "completed",
+      },
+    ])
   })
 })
 

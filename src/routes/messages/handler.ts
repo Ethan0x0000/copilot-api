@@ -46,13 +46,16 @@ import type { SubagentMarker } from "./subagent-marker"
 import {
   type AnthropicMessagesPayload,
   type AnthropicStreamState,
-  type AnthropicTextBlock,
-  type AnthropicToolResultBlock,
 } from "./anthropic-types"
 import {
   translateToAnthropic,
   translateToOpenAI,
 } from "./non-stream-translation"
+import {
+  isCompactRequest,
+  mergeToolResultForClaude,
+  stripToolReferenceTurnBoundary,
+} from "./preprocess"
 import {
   mapReasoningEffortToAnthropic,
   resolveRequestedReasoningEffort,
@@ -62,9 +65,6 @@ import { translateChunkToAnthropicEvents } from "./stream-translation"
 import { parseSubagentMarkerFromFirstUser } from "./subagent-marker"
 
 const logger = createHandlerLogger("messages-handler")
-
-const compactSystemPromptStart =
-  "You are a helpful AI assistant tasked with summarizing conversations"
 
 export async function handleCompletion(c: Context) {
   await checkRateLimit(state)
@@ -95,6 +95,8 @@ export async function handleCompletion(c: Context) {
   if (isCompact) {
     logger.debug("Is compact request:", isCompact)
   } else {
+    stripToolReferenceTurnBoundary(anthropicPayload)
+
     // Merge tool_result and text blocks into tool_result to avoid consuming premium requests
     // (caused by skill invocations, edit hooks, plan or to do reminders)
     // e.g. {"role":"user","content":[{"type":"tool_result","content":"Launching skill: xxx"},{"type":"text","text":"xxx"}]}
@@ -439,87 +441,4 @@ const getAnthropicEffortForModel = (
   const reasoningEffort = requestedEffort ?? getReasoningEffortForModel(model)
 
   return mapReasoningEffortToAnthropic(reasoningEffort)
-}
-
-const isCompactRequest = (
-  anthropicPayload: AnthropicMessagesPayload,
-): boolean => {
-  const system = anthropicPayload.system
-  if (typeof system === "string") {
-    return system.startsWith(compactSystemPromptStart)
-  }
-  if (!Array.isArray(system)) return false
-
-  return system.some(
-    (msg) =>
-      typeof msg.text === "string"
-      && msg.text.startsWith(compactSystemPromptStart),
-  )
-}
-
-const mergeContentWithText = (
-  tr: AnthropicToolResultBlock,
-  textBlock: AnthropicTextBlock,
-): AnthropicToolResultBlock => {
-  if (typeof tr.content === "string") {
-    return { ...tr, content: `${tr.content}\n\n${textBlock.text}` }
-  }
-  return {
-    ...tr,
-    content: [...tr.content, textBlock],
-  }
-}
-
-const mergeContentWithTexts = (
-  tr: AnthropicToolResultBlock,
-  textBlocks: Array<AnthropicTextBlock>,
-): AnthropicToolResultBlock => {
-  if (typeof tr.content === "string") {
-    const appendedTexts = textBlocks.map((tb) => tb.text).join("\n\n")
-    return { ...tr, content: `${tr.content}\n\n${appendedTexts}` }
-  }
-  return { ...tr, content: [...tr.content, ...textBlocks] }
-}
-
-const mergeToolResultForClaude = (
-  anthropicPayload: AnthropicMessagesPayload,
-): void => {
-  for (const msg of anthropicPayload.messages) {
-    if (msg.role !== "user" || !Array.isArray(msg.content)) continue
-
-    const toolResults: Array<AnthropicToolResultBlock> = []
-    const textBlocks: Array<AnthropicTextBlock> = []
-    let valid = true
-
-    for (const block of msg.content) {
-      if (block.type === "tool_result") {
-        toolResults.push(block)
-      } else if (block.type === "text") {
-        textBlocks.push(block)
-      } else {
-        valid = false
-        break
-      }
-    }
-
-    if (!valid || toolResults.length === 0 || textBlocks.length === 0) continue
-
-    msg.content = mergeToolResult(toolResults, textBlocks)
-  }
-}
-
-const mergeToolResult = (
-  toolResults: Array<AnthropicToolResultBlock>,
-  textBlocks: Array<AnthropicTextBlock>,
-): Array<AnthropicToolResultBlock> => {
-  // equal lengths -> pairwise merge
-  if (toolResults.length === textBlocks.length) {
-    return toolResults.map((tr, i) => mergeContentWithText(tr, textBlocks[i]))
-  }
-
-  // lengths differ -> append all textBlocks to the last tool_result
-  const lastIndex = toolResults.length - 1
-  return toolResults.map((tr, i) =>
-    i === lastIndex ? mergeContentWithTexts(tr, textBlocks) : tr,
-  )
 }
