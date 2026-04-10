@@ -96,7 +96,7 @@ const withPriority = (
   return account
 }
 
-describe("AccountManager.selectBestAccount quota-aware selection", () => {
+describe("AccountManager.selectBestAccount priority-aware selection", () => {
   test("selects account with highest quota remaining among same-tier", () => {
     const manager = new AccountManager()
 
@@ -162,18 +162,18 @@ describe("AccountManager.selectBestAccount quota-aware selection", () => {
     expect(selected?.name).toBe("pro-with-quota")
   })
 
-  test("falls back to priority then requestCount when all quotas are equal", () => {
+  test("prefers lower priority even when another account has more remaining quota", () => {
     const manager = new AccountManager()
 
     const account1 = withPriority(
       withQuota(
         createAccount({
-          name: "acct-a",
+          name: "priority-first",
           tier: "pro",
           modelCatalogKnown: true,
           models: ["gpt-5.4"],
         }),
-        { remaining: 100, entitlement: 300, unlimited: false },
+        { remaining: 10, entitlement: 300, unlimited: false },
       ),
       1,
     )
@@ -181,23 +181,52 @@ describe("AccountManager.selectBestAccount quota-aware selection", () => {
     const account2 = withPriority(
       withQuota(
         createAccount({
-          name: "acct-b",
+          name: "quota-first",
           tier: "pro",
           modelCatalogKnown: true,
           models: ["gpt-5.4"],
         }),
-        { remaining: 100, entitlement: 300, unlimited: false },
+        { remaining: 200, entitlement: 300, unlimited: false },
       ),
-      2,
+      50,
     )
 
     seedAccounts(manager, [account1, account2])
 
     const selected = manager.resolveAccount(undefined, "gpt-5.4")
-    expect(selected?.name).toBe("acct-a")
+    expect(selected?.name).toBe("priority-first")
   })
 
-  test("handles unlimited=true as highest priority", () => {
+  test("falls back to quota then requestCount when priorities are equal", () => {
+    const manager = new AccountManager()
+
+    const account1 = withQuota(
+      createAccount({
+        name: "acct-a",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["gpt-5.4"],
+      }),
+      { remaining: 100, entitlement: 300, unlimited: false },
+    )
+
+    const account2 = withQuota(
+      createAccount({
+        name: "acct-b",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["gpt-5.4"],
+      }),
+      { remaining: 200, entitlement: 300, unlimited: false },
+    )
+
+    seedAccounts(manager, [account1, account2])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+    expect(selected?.name).toBe("acct-b")
+  })
+
+  test("treats unlimited quota as the highest quota score among equal priorities", () => {
     const manager = new AccountManager()
 
     const account1 = withQuota(
@@ -584,7 +613,7 @@ describe("AccountManager integration — full load balancing flow", () => {
     expect(picks[0]).toBe("pro-1")
   })
 
-  test("2. quota distribution: new sessions go to highest-quota account, then next-highest after quota drops", () => {
+  test("2. quota distribution: among default priorities, new sessions go to highest-quota account, then next-highest after quota drops", () => {
     const manager = new AccountManager()
 
     seedAccounts(manager, [
@@ -626,7 +655,7 @@ describe("AccountManager integration — full load balancing flow", () => {
       ),
     ])
 
-    // First new session goes to the account with highest quota (pro-1, 200)
+    // With default priorities, the first new session goes to the highest-quota account (pro-1, 200)
     const first = manager.resolveAccount("session-1", "gpt-5.4")
     expect(first?.name).toBe("pro-1")
 
@@ -637,7 +666,7 @@ describe("AccountManager integration — full load balancing flow", () => {
       pro1.usageSummary.premium.remaining = 120 // now 120 < pro-2's 150
     }
 
-    // Second NEW session should go to pro-2 (now highest: 150 > 120)
+    // Second NEW session should go to pro-2 because priorities are still equal and 150 > 120
     const second = manager.resolveAccount("session-2", "gpt-5.4")
     expect(second?.name).toBe("pro-2")
 
@@ -715,7 +744,7 @@ describe("AccountManager integration — full load balancing flow", () => {
     expect(selected).toBeUndefined()
   })
 
-  test("5. tier+quota integration: pro-only model picks highest-quota pro account, session sticks despite student having more quota", () => {
+  test("5. tier+quota integration: pro-only model picks highest-quota pro account when priorities are equal, session sticks despite student having more quota", () => {
     const manager = new AccountManager()
     const internals = toInternals(manager)
 
@@ -725,7 +754,7 @@ describe("AccountManager integration — full load balancing flow", () => {
     }
 
     // Student has HIGHEST quota overall (500), but model requires pro tier
-    // Among pro accounts, pro-1 has more remaining quota than pro-2
+    // Among pro accounts with default priorities, pro-1 has more remaining quota than pro-2
     seedAccounts(manager, [
       withQuota(
         createAccount({
@@ -756,7 +785,7 @@ describe("AccountManager integration — full load balancing flow", () => {
       ),
     ])
 
-    // First call: should go to pro-1 (highest quota among pro accounts, student excluded)
+    // First call: should go to pro-1 (highest quota among eligible pro accounts with equal priorities)
     const first = manager.resolveAccount("user-session", "gpt-5.4")
     expect(first?.name).toBe("pro-1")
     expect(first?.name).not.toBe("student-1")
@@ -765,7 +794,7 @@ describe("AccountManager integration — full load balancing flow", () => {
     const second = manager.resolveAccount("user-session", "gpt-5.4")
     expect(second?.name).toBe("pro-1")
 
-    // Third call NEW session: new session also picks pro-1 (still highest quota)
+    // Third call NEW session: new session also picks pro-1 because priorities are still equal and it has the highest quota
     const newSession = manager.resolveAccount("new-session", "gpt-5.4")
     expect(newSession?.name).toBe("pro-1")
     expect(newSession?.name).not.toBe("student-1")

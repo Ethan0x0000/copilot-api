@@ -544,7 +544,7 @@ export class AccountManager {
 
   /**
    * Select the best available account from candidates.
-   * Strategy: quota-remaining-first (higher premium.remaining wins), then priority, then requestCount.
+   * Strategy: priority-first (lower numeric value wins), then quota remaining, then requestCount.
    */
   private selectBestAccount(candidates: Array<AccountState>): AccountState {
     const getRemainingScore = (acct: AccountState): number => {
@@ -553,13 +553,13 @@ export class AccountManager {
     }
 
     const sorted = [...candidates].sort((a, b) => {
-      const ra = getRemainingScore(a)
-      const rb = getRemainingScore(b)
-      if (ra !== rb) return rb - ra
-
       const pa = a.priority ?? 100
       const pb = b.priority ?? 100
       if (pa !== pb) return pa - pb
+
+      const ra = getRemainingScore(a)
+      const rb = getRemainingScore(b)
+      if (ra !== rb) return rb - ra
 
       return a.requestCount - b.requestCount
     })
