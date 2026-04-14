@@ -154,6 +154,31 @@ describe("AccountManager.resolveAccount model routing", () => {
     const selected = manager.resolveAccount(undefined, "gpt-5.4")
     expect(selected?.name).toBe("pro-1")
   })
+
+  test("remaps sticky sessions when the bound account does not support the routed model", () => {
+    const manager = new AccountManager()
+
+    seedAccounts(manager, [
+      createAccount({
+        name: "claude-only",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["claude-opus-4.6"],
+      }),
+      createAccount({
+        name: "small-model",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["gpt-5-mini"],
+      }),
+    ])
+
+    const initial = manager.resolveAccount("sticky-session", "claude-opus-4.6")
+    expect(initial?.name).toBe("claude-only")
+
+    const remapped = manager.resolveAccount("sticky-session", "gpt-5-mini")
+    expect(remapped?.name).toBe("small-model")
+  })
 })
 
 describe("AccountManager.selectBestAccount usage-count balancing", () => {

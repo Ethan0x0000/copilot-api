@@ -316,14 +316,15 @@ export class AccountManager {
       const session = this.sessionMap.get(sessionId)
       if (session) {
         const account = this.accounts.get(session.accountName)
-        const now = Date.now()
-        const isUsable =
-          account?.active
-          && account.status === "ready"
-          && (!account.cooldownUntil || account.cooldownUntil <= now)
+        const isEligibleForRequest =
+          account ?
+            eligibleAccounts.some(
+              (candidate) => candidate.name === account.name,
+            )
+          : false
 
-        if (isUsable) {
-          session.lastSeen = now
+        if (account && isEligibleForRequest) {
+          session.lastSeen = Date.now()
           if (record) this.recordRequest(account, model)
           return this.toContext(account)
         }
@@ -360,6 +361,44 @@ export class AccountManager {
     consola.warn(
       `Account ${accountName} cooled down for ${Math.round(durationMs / 1000)}s: ${reason}`,
     )
+  }
+
+  markAccountRateLimited(
+    accountName: string,
+    durationMs: number,
+    reason: string,
+  ): void {
+    const account = this.accounts.get(accountName)
+    if (!account) return
+    account.status = "rate_limited"
+    account.lastError = reason
+    account.cooldownUntil = Date.now() + durationMs
+    account.cooldownReason = reason
+    consola.warn(
+      `Account ${accountName} marked rate limited for ${Math.round(durationMs / 1000)}s: ${reason}`,
+    )
+  }
+
+  markAccountQuotaExhausted(accountName: string, reason: string): void {
+    const account = this.accounts.get(accountName)
+    if (!account) return
+    account.status = "quota_exhausted"
+    account.lastError = reason
+    account.cooldownUntil = undefined
+    account.cooldownReason = undefined
+    this.clearSessionsForAccount(accountName)
+    consola.warn(`Account ${accountName} marked quota exhausted: ${reason}`)
+  }
+
+  markAccountDisabled(accountName: string, reason: string): void {
+    const account = this.accounts.get(accountName)
+    if (!account) return
+    account.status = "disabled"
+    account.lastError = reason
+    account.cooldownUntil = undefined
+    account.cooldownReason = undefined
+    this.clearSessionsForAccount(accountName)
+    consola.warn(`Account ${accountName} disabled: ${reason}`)
   }
 
   markModelUnavailable(accountName: string, model: string): void {
@@ -498,6 +537,7 @@ export class AccountManager {
             && premium.remaining > 0
           ) {
             account.status = "ready"
+            account.lastError = undefined
           }
         }
       } catch (error) {
@@ -534,11 +574,35 @@ export class AccountManager {
 
   private getActiveAccounts(): Array<AccountState> {
     const now = Date.now()
-    return [...this.accounts.values()].filter(
-      (a) =>
-        a.active
-        && a.status === "ready"
-        && (!a.cooldownUntil || a.cooldownUntil <= now),
+    return [...this.accounts.values()].filter((account) =>
+      this.isAccountReady(account, now),
+    )
+  }
+
+  private clearSessionsForAccount(accountName: string): void {
+    for (const [sessionId, entry] of this.sessionMap.entries()) {
+      if (entry.accountName === accountName) {
+        this.sessionMap.delete(sessionId)
+      }
+    }
+  }
+
+  private isAccountReady(account: AccountState, now: number): boolean {
+    if (!account.active) return false
+
+    if (
+      account.status === "rate_limited"
+      && (!account.cooldownUntil || account.cooldownUntil <= now)
+    ) {
+      account.status = "ready"
+      account.lastError = undefined
+      account.cooldownUntil = undefined
+      account.cooldownReason = undefined
+    }
+
+    return (
+      account.status === "ready"
+      && (!account.cooldownUntil || account.cooldownUntil <= now)
     )
   }
 

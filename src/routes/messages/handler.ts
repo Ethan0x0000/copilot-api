@@ -5,13 +5,8 @@ import { type SSEStreamingApi, streamSSE } from "hono/streaming"
 import type { Model } from "~/services/copilot/get-models"
 
 import { awaitApproval } from "~/lib/approval"
-import {
-  getSmallModel,
-  getReasoningEffortForModel,
-  isMessagesApiEnabled,
-} from "~/lib/config"
+import { getReasoningEffortForModel, isMessagesApiEnabled } from "~/lib/config"
 import { createHandlerLogger } from "~/lib/logger"
-import { findEndpointModel } from "~/lib/models"
 import { checkRateLimit } from "~/lib/rate-limit"
 import { state } from "~/lib/state"
 import {
@@ -51,6 +46,7 @@ import {
   type AnthropicMessagesPayload,
   type AnthropicStreamState,
 } from "./anthropic-types"
+import { resolveAnthropicRequestModel } from "./model-routing"
 import {
   translateToAnthropic,
   translateToOpenAI,
@@ -110,10 +106,6 @@ export async function handleCompletion(c: Context) {
   // set "CLAUDE_CODE_SUBAGENT_MODEL": "you small model" also can avoid this
   const anthropicBeta = c.req.header("anthropic-beta")
   logger.debug("Anthropic Beta header:", anthropicBeta)
-  const noTools = !anthropicPayload.tools || anthropicPayload.tools.length === 0
-  if (anthropicBeta && noTools && !isCompact) {
-    anthropicPayload.model = getSmallModel()
-  }
 
   if (isCompact) {
     logger.debug("Is compact request:", isCompact)
@@ -135,8 +127,11 @@ export async function handleCompletion(c: Context) {
     await awaitApproval()
   }
 
-  const selectedModel = findEndpointModel(anthropicPayload.model)
-  anthropicPayload.model = selectedModel?.id ?? anthropicPayload.model
+  const { model: routedModel, selectedModel } = resolveAnthropicRequestModel(
+    anthropicPayload,
+    anthropicBeta,
+  )
+  anthropicPayload.model = routedModel
 
   if (shouldUseMessagesApi(selectedModel)) {
     return await handleWithMessagesApi(c, anthropicPayload, {

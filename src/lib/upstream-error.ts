@@ -1,5 +1,66 @@
 const DEFAULT_COOLDOWN_MS = 90_000 // 90 seconds
 
+export type UpstreamAccountFailureStatus =
+  | "rate_limited"
+  | "quota_exhausted"
+  | "disabled"
+
+export interface UpstreamAccountFailure {
+  status: UpstreamAccountFailureStatus
+  reason: string
+}
+
+async function readUpstreamBodyText(response: Response): Promise<string> {
+  return response
+    .clone()
+    .text()
+    .catch(() => "")
+}
+
+export async function classifyUpstreamAccountFailure(
+  response: Response,
+): Promise<UpstreamAccountFailure | undefined> {
+  if (response.status === 429) {
+    return {
+      status: "rate_limited",
+      reason: "Upstream rate limit (HTTP 429)",
+    }
+  }
+
+  if (response.status >= 500 || response.status !== 403) {
+    return undefined
+  }
+
+  const lower = (await readUpstreamBodyText(response)).toLowerCase()
+
+  if (
+    lower.includes("temporarily paused")
+    || lower.includes("upgrade your account")
+    || lower.includes("revert to copilot free")
+  ) {
+    return {
+      status: "disabled",
+      reason: "Copilot account temporarily paused upstream (HTTP 403)",
+    }
+  }
+
+  if (lower.includes("quota") || lower.includes("exhaust")) {
+    return {
+      status: "quota_exhausted",
+      reason: "Upstream quota exhausted (HTTP 403)",
+    }
+  }
+
+  if (lower.includes("rate limit") || lower.includes("capacity")) {
+    return {
+      status: "rate_limited",
+      reason: "Upstream rate limit (HTTP 403)",
+    }
+  }
+
+  return undefined
+}
+
 /**
  * Detect if an upstream Copilot API response indicates a quota/rate-limit error.
  * Uses response.clone() so the original body is still consumable.
@@ -7,20 +68,9 @@ const DEFAULT_COOLDOWN_MS = 90_000 // 90 seconds
 export async function isUpstreamQuotaOrRateLimit(
   response: Response,
 ): Promise<boolean> {
-  if (response.status === 429) return true
-  if (response.status >= 500) return false
-  if (response.status !== 403) return false
-
-  const text = await response
-    .clone()
-    .text()
-    .catch(() => "")
-  const lower = text.toLowerCase()
+  const failure = await classifyUpstreamAccountFailure(response)
   return (
-    lower.includes("rate limit")
-    || lower.includes("quota")
-    || lower.includes("exhaust")
-    || lower.includes("capacity")
+    failure?.status === "rate_limited" || failure?.status === "quota_exhausted"
   )
 }
 
@@ -33,10 +83,7 @@ export async function isUpstreamModelUnavailable(
 ): Promise<boolean> {
   if (![400, 403, 404].includes(response.status)) return false
 
-  const text = await response
-    .clone()
-    .text()
-    .catch(() => "")
+  const text = await readUpstreamBodyText(response)
   const lower = text.toLowerCase()
   if (!lower.includes("model")) return false
 

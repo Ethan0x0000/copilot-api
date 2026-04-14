@@ -2,7 +2,10 @@ import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { logger } from "hono/logger"
 
+import type { AnthropicMessagesPayload } from "./routes/messages/anthropic-types"
+
 import { runWithAccount } from "./lib/account-context"
+import { findEndpointModel } from "./lib/models"
 import { createAuthMiddleware } from "./lib/request-auth"
 import { state } from "./lib/state"
 import { traceIdMiddleware } from "./lib/trace"
@@ -11,6 +14,7 @@ import { accountsRoute } from "./routes/accounts/route"
 import { apiKeysRoute } from "./routes/api-keys/route"
 import { completionRoutes } from "./routes/chat-completions/route"
 import { embeddingRoutes } from "./routes/embeddings/route"
+import { resolveAnthropicRequestModel } from "./routes/messages/model-routing"
 import { messageRoutes } from "./routes/messages/route"
 import { modelRoutes } from "./routes/models/route"
 import { providerMessageRoutes } from "./routes/provider/messages/route"
@@ -19,6 +23,14 @@ import { responsesRoutes } from "./routes/responses/route"
 import { tokenRoute } from "./routes/token/route"
 
 export const server = new Hono()
+
+interface RequestRoutingBody {
+  model?: string
+  metadata?: { user_id?: string }
+  messages?: AnthropicMessagesPayload["messages"]
+  system?: AnthropicMessagesPayload["system"]
+  tools?: AnthropicMessagesPayload["tools"]
+}
 
 const copilotRoutePaths = new Set([
   "/chat/completions",
@@ -42,6 +54,26 @@ function isCopilotApiRoute(path: string): boolean {
   // Match provider routes: /:provider/v1/messages, /:provider/v1/models
   if (/^\/[^/]+\/v1\/(?:messages|models)(?:\/|$)/.test(path)) return true
   return false
+}
+
+function resolveRequestModel(
+  path: string,
+  body: RequestRoutingBody,
+  anthropicBetaHeader: string | undefined,
+): string | undefined {
+  if (!body.model) return undefined
+
+  return path === "/v1/messages" ?
+      resolveAnthropicRequestModel(
+        {
+          model: body.model,
+          messages: body.messages ?? [],
+          system: body.system,
+          tools: body.tools,
+        },
+        anthropicBetaHeader,
+      ).model
+    : (findEndpointModel(body.model)?.id ?? body.model)
 }
 
 server.use(traceIdMiddleware)
@@ -68,11 +100,12 @@ server.use("*", async (c, next) => {
   if (c.req.method === "POST") {
     try {
       const cloned = c.req.raw.clone()
-      const body = (await cloned.json()) as {
-        model?: string
-        metadata?: { user_id?: string }
-      }
-      model = body.model
+      const body = (await cloned.json()) as RequestRoutingBody
+      model = resolveRequestModel(
+        c.req.path,
+        body,
+        c.req.header("anthropic-beta"),
+      )
 
       if (!sessionId && body.metadata?.user_id) {
         const parsed = parseUserIdMetadata(body.metadata.user_id)

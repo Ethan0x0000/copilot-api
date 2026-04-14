@@ -5,8 +5,9 @@ import type { AccountManager } from "./account-manager"
 import { getAccountContext } from "./account-context"
 import { state } from "./state"
 import {
+  classifyUpstreamAccountFailure,
+  type UpstreamAccountFailure,
   isUpstreamModelUnavailable,
-  isUpstreamQuotaOrRateLimit,
   isUpstreamServerError,
   parseRetryAfterMs,
 } from "./upstream-error"
@@ -34,6 +35,13 @@ interface FailoverOptions {
   excludedAccounts: Set<string>
   accountName: string
   reason: string
+}
+
+interface AccountFailureOptions {
+  accountManager: AccountManager
+  accountName: string
+  response: Response
+  failure: UpstreamAccountFailure
 }
 
 /**
@@ -68,6 +76,26 @@ function resolveFailover(opts: FailoverOptions): FailoverResult | undefined {
     requestInit: { ...currentInit, headers },
     accountName: nextAccount.name,
   }
+}
+
+function applyAccountFailure(opts: AccountFailureOptions): void {
+  const { accountManager, accountName, response, failure } = opts
+
+  if (failure.status === "rate_limited") {
+    accountManager.markAccountRateLimited(
+      accountName,
+      parseRetryAfterMs(response.headers, DEFAULT_COOLDOWN_MS),
+      failure.reason,
+    )
+    return
+  }
+
+  if (failure.status === "quota_exhausted") {
+    accountManager.markAccountQuotaExhausted(accountName, failure.reason)
+    return
+  }
+
+  accountManager.markAccountDisabled(accountName, failure.reason)
 }
 
 /**
@@ -117,20 +145,22 @@ export async function copilotFetchWithRetry(
 
     if (response.ok) return response
 
-    // Rate-limit / quota error
-    if (await isUpstreamQuotaOrRateLimit(response)) {
-      accountManager.markAccountCooldown(
-        currentAccountName,
-        parseRetryAfterMs(response.headers, DEFAULT_COOLDOWN_MS),
-        `Upstream rate limit (HTTP ${response.status})`,
-      )
+    const accountFailure = await classifyUpstreamAccountFailure(response)
+    if (accountFailure) {
+      applyAccountFailure({
+        accountManager,
+        accountName: currentAccountName,
+        response,
+        failure: accountFailure,
+      })
+
       const failover = resolveFailover({
         accountManager,
         currentInit: requestInit,
         ctx,
         excludedAccounts,
         accountName: currentAccountName,
-        reason: `Account ${currentAccountName} rate-limited (${tag})`,
+        reason: `Account ${currentAccountName} ${accountFailure.status.replaceAll("_", " ")} (${tag})`,
       })
       if (!failover) return response
       ;({ requestInit, accountName: currentAccountName } = failover)
