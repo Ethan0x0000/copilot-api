@@ -16,7 +16,11 @@ import { runWithAccount } from "./account-context"
 import { recordAccountRequest } from "./account-state"
 import { setApiKeyResetDate } from "./api-key-usage"
 import { getRoutingConfig } from "./config"
-import { buildRoutingContext, filterAndSortByTier } from "./routing"
+import {
+  buildRoutingContext,
+  filterAndSortByTier,
+  filterByRoutedAccountNames,
+} from "./routing"
 import { extractUsageSummary } from "./subscription"
 import { fetchCopilotTokenForAccount, startAccountRefreshLoop } from "./token"
 
@@ -284,7 +288,14 @@ export class AccountManager {
     accounts: Array<AccountState>,
     model: string,
   ): Array<AccountState> {
-    const withCatalog = accounts.filter((a) => a.modelCatalogKnown)
+    const routedAccounts = filterByRoutedAccountNames(
+      accounts,
+      model,
+      this.routingCtx,
+    )
+    if (routedAccounts.length === 0) return []
+
+    const withCatalog = routedAccounts.filter((a) => a.modelCatalogKnown)
     if (withCatalog.length === 0) return []
 
     const withModel = withCatalog.filter((a) => a.availableModels.has(model))
@@ -419,13 +430,7 @@ export class AccountManager {
     if (eligible.length === 0) return undefined
 
     if (model) {
-      const withCatalog = eligible.filter((a) => a.modelCatalogKnown)
-      if (withCatalog.length === 0) return undefined
-      const withModel = withCatalog.filter(
-        (a) => a.availableModels.has(model) && !a.unsupportedModels.has(model),
-      )
-      if (withModel.length === 0) return undefined
-      eligible = filterAndSortByTier(withModel, model, this.routingCtx)
+      eligible = this.filterByModel(eligible, model)
       if (eligible.length === 0) return undefined
     }
 

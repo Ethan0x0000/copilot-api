@@ -16,8 +16,10 @@ export interface AccountConfig {
 export interface RoutingConfig {
   /** Tier priority from lowest to highest, e.g. ["free","student","pro","pro_plus"] */
   tierPriority?: Array<string>
-  /** Model → minimum tier required. Supports trailing wildcard: "o1*" matches "o1-pro", "o1-mini" */
+  /** Model → minimum tier required. Supports trailing wildcard: "o1*" matches "o1-pro", "o1-mini"; "*" matches all models */
   modelTierRequirements?: Record<string, string>
+  /** Model → allowed account names. Supports trailing wildcard: "gpt-5*" matches "gpt-5.4", "gpt-5-mini"; "*" matches all models */
+  modelAccountNameRoutes?: Record<string, Array<string>>
 }
 
 export interface ApiKeyConfig {

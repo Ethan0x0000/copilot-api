@@ -33,6 +33,7 @@ interface AccountManagerInternals {
   routingCtx: {
     tierPriority: Array<string>
     modelTierRequirements: Record<string, string>
+    modelAccountNameRoutes?: Record<string, Array<string>>
   }
 }
 
@@ -566,6 +567,63 @@ describe("AccountManager.resolveFailoverAccount session remapping", () => {
 
     expect(failover?.name).toBe("pro-2")
     expect(internals.sessionMap.size).toBe(0)
+  })
+
+  test("failover stays within the routed account-name list", () => {
+    const manager = new AccountManager()
+    const internals = toFailoverInternals(manager)
+
+    internals.routingCtx = {
+      tierPriority: ["free", "student", "pro", "pro_plus"],
+      modelTierRequirements: {},
+      modelAccountNameRoutes: {
+        "gpt-5.4": ["routed-primary", "routed-secondary"],
+      },
+    }
+
+    seedAccounts(manager, [
+      withPriority(
+        createAccount({
+          name: "blocked-outside-route",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        1,
+      ),
+      withPriority(
+        createAccount({
+          name: "routed-primary",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        2,
+      ),
+      withPriority(
+        createAccount({
+          name: "routed-secondary",
+          tier: "pro",
+          modelCatalogKnown: true,
+          models: ["gpt-5.4"],
+        }),
+        3,
+      ),
+    ])
+
+    const initial = manager.resolveAccount("route-session", "gpt-5.4")
+    expect(initial?.name).toBe("routed-primary")
+
+    const failover = manager.resolveFailoverAccount(
+      "route-session",
+      "gpt-5.4",
+      new Set(["routed-primary"]),
+    )
+
+    expect(failover?.name).toBe("routed-secondary")
+    expect(internals.sessionMap.get("route-session")?.accountName).toBe(
+      "routed-secondary",
+    )
   })
 })
 

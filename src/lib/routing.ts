@@ -2,6 +2,29 @@ import type { RoutingConfig } from "./config"
 
 const DEFAULT_TIER_PRIORITY = ["free", "student", "pro", "pro_plus"]
 
+function getMatchedModelRoutingValue<T>(
+  model: string,
+  routes: Record<string, T>,
+): T | undefined {
+  if (Object.hasOwn(routes, model)) {
+    return routes[model]
+  }
+
+  let bestMatch: T | undefined
+  let bestLen = -1
+
+  for (const [pattern, value] of Object.entries(routes)) {
+    if (!pattern.endsWith("*")) continue
+    const prefix = pattern.slice(0, -1)
+    if (model.startsWith(prefix) && prefix.length > bestLen) {
+      bestMatch = value
+      bestLen = prefix.length
+    }
+  }
+
+  return bestMatch
+}
+
 /**
  * Get the numeric rank of a tier. Higher = more capable.
  * Unknown tiers get rank -1 (treated as lowest).
@@ -22,25 +45,17 @@ export function getModelMinTier(
   model: string,
   requirements: Record<string, string>,
 ): string | undefined {
-  // Exact match first
-  if (requirements[model]) {
-    return requirements[model]
-  }
+  return getMatchedModelRoutingValue(model, requirements)
+}
 
-  // Wildcard match — longest prefix wins
-  let bestMatch: string | undefined
-  let bestLen = 0
+export function getModelAllowedAccountNames(
+  model: string,
+  routes: Record<string, Array<string>>,
+): Array<string> | undefined {
+  const matched = getMatchedModelRoutingValue(model, routes)
+  if (!matched) return undefined
 
-  for (const [pattern, tier] of Object.entries(requirements)) {
-    if (!pattern.endsWith("*")) continue
-    const prefix = pattern.slice(0, -1)
-    if (model.startsWith(prefix) && prefix.length > bestLen) {
-      bestMatch = tier
-      bestLen = prefix.length
-    }
-  }
-
-  return bestMatch
+  return [...new Set(matched.map((name) => name.trim()).filter(Boolean))]
 }
 
 /**
@@ -66,13 +81,41 @@ export function isTierEligible(
 export interface TierRoutingContext {
   tierPriority: Array<string>
   modelTierRequirements: Record<string, string>
+  modelAccountNameRoutes?: Record<string, Array<string>>
 }
 
 export function buildRoutingContext(config: RoutingConfig): TierRoutingContext {
   return {
     tierPriority: config.tierPriority ?? DEFAULT_TIER_PRIORITY,
     modelTierRequirements: config.modelTierRequirements ?? {},
+    modelAccountNameRoutes: config.modelAccountNameRoutes ?? {},
   }
+}
+
+export function filterByRoutedAccountNames<T extends { name: string }>(
+  accounts: Array<T>,
+  model: string | undefined,
+  ctx: TierRoutingContext,
+): Array<T> {
+  const modelAccountNameRoutes = ctx.modelAccountNameRoutes ?? {}
+
+  if (!model || Object.keys(modelAccountNameRoutes).length === 0) {
+    return accounts
+  }
+
+  const allowedAccountNames = getModelAllowedAccountNames(
+    model,
+    modelAccountNameRoutes,
+  )
+  if (!allowedAccountNames) {
+    return accounts
+  }
+  if (allowedAccountNames.length === 0) {
+    return []
+  }
+
+  const allowedAccountNameSet = new Set(allowedAccountNames)
+  return accounts.filter((account) => allowedAccountNameSet.has(account.name))
 }
 
 /**

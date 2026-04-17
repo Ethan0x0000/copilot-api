@@ -281,6 +281,16 @@ The following command line options are available for the `start` command:
     "auth": {
       "apiKeys": []
     },
+    "routing": {
+      "tierPriority": ["free", "student", "pro", "pro_plus"],
+      "modelTierRequirements": {
+        "gpt-5.4": "pro"
+      },
+      "modelAccountNameRoutes": {
+        "claude-opus-4.6": ["claude-primary", "claude-backup"],
+        "gpt-5*": ["gpt-primary", "gpt-backup"]
+      }
+    },
     "providers": {
       "custom": {
         "type": "anthropic",
@@ -314,6 +324,10 @@ The following command line options are available for the `start` command:
   }
   ```
 - **auth.apiKeys:** API keys used for request authentication. Supports multiple keys for rotation. Requests can authenticate with either `x-api-key: <key>` or `Authorization: Bearer <key>`. If empty or omitted, authentication is disabled.
+- **routing:** Multi-account routing rules for model-aware selection.
+  - `tierPriority` (optional): Tier order from lowest to highest capability.
+  - `modelTierRequirements` (optional): Model → minimum tier required. Supports trailing wildcard matching such as `gpt-5*`; use bare `*` as a catch-all for all models.
+  - `modelAccountNameRoutes` (optional): Model → allowed account-name list. Supports trailing wildcard matching such as `gpt-5*`; use bare `*` as a catch-all for all models. When a request model matches, only the listed account names remain eligible, and then the normal `priority -> quota -> requestCount` selection continues inside that filtered set.
 - **extraPrompts:** Map of `model -> prompt` appended to the first system prompt when translating Anthropic-style requests to Copilot. Use this to inject guardrails or guidance per model. Missing default entries are auto-added without overwriting your custom prompts. The built-in prompts for `gpt-5.3-codex` and `gpt-5.4` enable phase-aware commentary, which lets the model emit a short user-facing progress update before tools or deeper reasoning.
 - **providers:** Global upstream provider map. Each provider key (for example `custom`) becomes a route prefix (`/custom/v1/messages`). Currently only `type: "anthropic"` is supported.
   - `enabled` defaults to `true` if omitted.

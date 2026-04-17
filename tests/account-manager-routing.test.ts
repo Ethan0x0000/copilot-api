@@ -22,6 +22,7 @@ interface AccountManagerInternals {
   routingCtx: {
     tierPriority: Array<string>
     modelTierRequirements: Record<string, string>
+    modelAccountNameRoutes?: Record<string, Array<string>>
   }
 }
 
@@ -178,6 +179,139 @@ describe("AccountManager.resolveAccount model routing", () => {
 
     const remapped = manager.resolveAccount("sticky-session", "gpt-5-mini")
     expect(remapped?.name).toBe("small-model")
+  })
+})
+
+describe("AccountManager.resolveAccount routed account-name filters", () => {
+  test("applies model account-name routing before priority selection", () => {
+    const manager = new AccountManager()
+    const internals = toInternals(manager)
+
+    internals.routingCtx = {
+      tierPriority: ["free", "student", "pro", "pro_plus"],
+      modelTierRequirements: {},
+      modelAccountNameRoutes: {
+        "gpt-5.4": ["allowed-backup", "allowed-primary"],
+      },
+    }
+
+    const blockedByRoute = createAccount({
+      name: "blocked-by-route",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5.4"],
+    })
+    ;(blockedByRoute as unknown as { priority: number }).priority = 1
+
+    const allowedBackup = createAccount({
+      name: "allowed-backup",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5.4"],
+    })
+    ;(allowedBackup as unknown as { priority: number }).priority = 20
+
+    const allowedPrimary = createAccount({
+      name: "allowed-primary",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5.4"],
+    })
+    ;(allowedPrimary as unknown as { priority: number }).priority = 5
+
+    seedAccounts(manager, [blockedByRoute, allowedBackup, allowedPrimary])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+    expect(selected?.name).toBe("allowed-primary")
+  })
+
+  test("fails closed when a model routes only to unknown account names", () => {
+    const manager = new AccountManager()
+    const internals = toInternals(manager)
+
+    internals.routingCtx = {
+      tierPriority: ["free", "student", "pro", "pro_plus"],
+      modelTierRequirements: {},
+      modelAccountNameRoutes: {
+        "gpt-5.4": ["missing-account"],
+      },
+    }
+
+    seedAccounts(manager, [
+      createAccount({
+        name: "pro-1",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["gpt-5.4"],
+      }),
+    ])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+    expect(selected).toBeUndefined()
+  })
+
+  test("supports catch-all account-name routing with bare wildcard", () => {
+    const manager = new AccountManager()
+    const internals = toInternals(manager)
+
+    internals.routingCtx = {
+      tierPriority: ["free", "student", "pro", "pro_plus"],
+      modelTierRequirements: {},
+      modelAccountNameRoutes: {
+        "*": ["catch-all-allowed"],
+      },
+    }
+
+    const blockedByRoute = createAccount({
+      name: "blocked-by-route",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5.4"],
+    })
+    ;(blockedByRoute as unknown as { priority: number }).priority = 1
+
+    const catchAllAllowed = createAccount({
+      name: "catch-all-allowed",
+      tier: "pro",
+      modelCatalogKnown: true,
+      models: ["gpt-5.4"],
+    })
+    ;(catchAllAllowed as unknown as { priority: number }).priority = 10
+
+    seedAccounts(manager, [blockedByRoute, catchAllAllowed])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+    expect(selected?.name).toBe("catch-all-allowed")
+  })
+
+  test("supports catch-all tier requirements with bare wildcard", () => {
+    const manager = new AccountManager()
+    const internals = toInternals(manager)
+
+    internals.routingCtx = {
+      tierPriority: ["free", "student", "pro", "pro_plus"],
+      modelTierRequirements: {
+        "*": "pro",
+      },
+    }
+
+    seedAccounts(manager, [
+      createAccount({
+        name: "student-1",
+        tier: "student",
+        modelCatalogKnown: true,
+        models: ["gpt-5.4"],
+      }),
+      createAccount({
+        name: "pro-1",
+        tier: "pro",
+        modelCatalogKnown: true,
+        models: ["gpt-5.4"],
+      }),
+    ])
+
+    const selected = manager.resolveAccount(undefined, "gpt-5.4")
+    expect(selected?.name).toBe("pro-1")
   })
 })
 
