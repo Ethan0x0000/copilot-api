@@ -20,6 +20,13 @@ import { state } from "~/lib/state"
 
 export type MessagesStream = ReturnType<typeof events>
 export type CreateMessagesReturn = AnthropicResponse | MessagesStream
+type AnthropicToolPayload = NonNullable<
+  AnthropicMessagesPayload["tools"]
+>[number]
+interface CopilotMessagesTool extends AnthropicToolPayload {
+  eager_input_streaming?: boolean
+  custom?: Record<string, unknown>
+}
 
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
 const allowedAnthropicBetas = new Set([
@@ -60,6 +67,57 @@ const buildAnthropicBetaHeader = (
   return undefined
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+const sanitizeToolForCopilotMessages = (
+  tool: AnthropicToolPayload,
+): { tool: AnthropicToolPayload; changed: boolean } => {
+  const candidate: CopilotMessagesTool = tool
+  const sanitized: CopilotMessagesTool = { ...candidate }
+  let changed = false
+
+  if (sanitized.eager_input_streaming !== undefined) {
+    delete sanitized.eager_input_streaming
+    changed = true
+  }
+
+  const custom = sanitized.custom
+  if (isRecord(custom) && "eager_input_streaming" in custom) {
+    const sanitizedCustom = { ...custom }
+    delete sanitizedCustom.eager_input_streaming
+    sanitized.custom = sanitizedCustom
+    changed = true
+  }
+
+  return {
+    tool: changed ? (sanitized as AnthropicToolPayload) : tool,
+    changed,
+  }
+}
+
+const sanitizePayloadForCopilotMessages = (
+  payload: AnthropicMessagesPayload,
+): AnthropicMessagesPayload => {
+  if (!payload.tools?.length) {
+    return payload
+  }
+
+  let changed = false
+  const tools: Array<AnthropicToolPayload> = []
+  for (const tool of payload.tools) {
+    const result = sanitizeToolForCopilotMessages(tool)
+    if (result.changed) {
+      changed = true
+    }
+
+    tools.push(result.tool)
+  }
+
+  return changed ? { ...payload, tools } : payload
+}
+
 export const createMessages = async (
   payload: AnthropicMessagesPayload,
   anthropicBetaHeader: string | undefined,
@@ -70,18 +128,19 @@ export const createMessages = async (
     isCompact?: boolean
   },
 ): Promise<CreateMessagesReturn> => {
+  const sanitizedPayload = sanitizePayloadForCopilotMessages(payload)
   const account = getAccountContext()
   const copilotToken = account?.copilotToken ?? state.copilotToken
   if (!copilotToken) throw new Error("Copilot token not found")
 
-  const enableVision = payload.messages.some(
+  const enableVision = sanitizedPayload.messages.some(
     (message) =>
       Array.isArray(message.content)
       && message.content.some((block) => block.type === "image"),
   )
 
   let isInitiateRequest = false
-  const lastMessage = payload.messages.at(-1)
+  const lastMessage = sanitizedPayload.messages.at(-1)
   if (lastMessage?.role === "user") {
     isInitiateRequest =
       Array.isArray(lastMessage.content) ?
@@ -105,7 +164,7 @@ export const createMessages = async (
   // align with vscode copilot extension anthropic-beta
   const anthropicBeta = buildAnthropicBetaHeader(
     anthropicBetaHeader,
-    payload.thinking,
+    sanitizedPayload.thinking,
   )
   if (anthropicBeta) {
     headers["anthropic-beta"] = anthropicBeta
@@ -116,9 +175,9 @@ export const createMessages = async (
     {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: JSON.stringify(sanitizedPayload),
     },
-    { model: payload.model, sessionId: options.sessionId },
+    { model: sanitizedPayload.model, sessionId: options.sessionId },
   )
 
   if (!response.ok) {
@@ -126,7 +185,7 @@ export const createMessages = async (
     throw new HTTPError("Failed to create messages", response)
   }
 
-  if (payload.stream) {
+  if (sanitizedPayload.stream) {
     return events(response)
   }
 
