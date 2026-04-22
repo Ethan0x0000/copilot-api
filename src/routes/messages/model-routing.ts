@@ -22,7 +22,13 @@ export function resolveAnthropicRequestModel(
     && noTools
     && !isCompactRequest(anthropicPayload as AnthropicMessagesPayload)
   ) {
-    routedModel = getSmallModel()
+    // Only fallback to small model if the original model is a known endpoint model.
+    // This prevents explicitly requested non-Claude models (e.g., gemini-3.1-pro-preview)
+    // from being incorrectly routed to the small model.
+    const originalModel = findEndpointModel(anthropicPayload.model)
+    if (originalModel) {
+      routedModel = getSmallModel()
+    }
   }
 
   const selectedModel = findEndpointModel(routedModel)
